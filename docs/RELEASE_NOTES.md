@@ -103,9 +103,57 @@ Two gotchas worth stating plainly:
   — never a list index, a timestamp, or a hash of the model output. A case_id that
   changes between snapshots is reported as one New case and one silently dropped one.
 
-### Pending — noise-aware diffing (schema 1.1.0)
+### Noise-aware diffing — results schema 1.0.0 → **1.1.0**
 
-Not in this release. When it lands it will add an optional per-case `runs` array and
-bump the results schema from 1.0.0 to 1.1.0, and this section gets the upgrade note:
-`runs`-bearing files are rejected by a stale on-disk schema, so the `drift init`
-instruction at the top of these notes applies with full force.
+**This is the change that makes the `drift init` note at the top of this file
+mandatory rather than advisory.** The new `runs` array is rejected by a 1.0.0 schema —
+`additionalProperties: false` doing its job — so in a repo that already ran `drift init`,
+every runs-bearing results file fails validation until `drift init` is re-run to refresh
+`.drift/schema/`. The error names your results file, not the stale schema, so it reads
+as an adapter bug. **Re-run `drift init` as part of this upgrade.**
+
+An eval scored once is a sample, not a measurement, and Drift used to call a case
+Regressed on a single noisy draw. Now a case can carry its repeated runs:
+
+```json
+{
+  "case_id": "support/refund-tone",
+  "metric_scores": { "accuracy": 0.81 },
+  "pass": true,
+  "environment": "golden_set",
+  "timestamp": "2026-09-01T09:41:02Z",
+  "runs": [
+    { "metric_scores": { "accuracy": 0.80 }, "pass": true },
+    { "metric_scores": { "accuracy": 0.85 }, "pass": true },
+    { "metric_scores": { "accuracy": 0.78 }, "pass": false }
+  ]
+}
+```
+
+- **`runs` is optional and additive.** Nothing in 1.0.0 changed type or became required.
+  A case without `runs` is one run — standard deviation 0, noise floor 0 — and therefore
+  buckets exactly as it did before. Every existing snapshot diffs to the same verdicts,
+  and an adapter that never emits `runs` needs no change.
+- **`drift diff` requires a change to clear the noise.** The cutoff is
+  `max(diff_threshold, noise_sigma × sqrt(sd_before² + sd_after²))`, sigma defaulting to
+  2.0 and settable via `noise_sigma` in `.drift/config.yaml` or `--noise-sigma`. The two
+  thresholds are combined with `max`, never by replacement: a single-run case has a floor
+  of 0, and replacing the threshold with it would make every rounding wobble a verdict.
+- **A case passes if most of its runs did**, with an exact tie falling back to the
+  case-level `pass`. One flaky failure is no longer a Regressed.
+- **Suppressed is not hidden.** Cases the floor withheld are listed by name with their
+  real deltas, under a line saying how many moved and why. Pass flips that did not
+  survive the majority get their own line.
+- **`runs_per_case`** (default 3) is the count Drift *expects* — it does not run your
+  evals — and `drift snapshot` warns when a case carries fewer.
+- **`metric_scores` stays required** as the compatibility surface for readers that know
+  nothing about `runs`. When it disagrees with the mean of the runs by more than 5×10⁻⁴,
+  `drift snapshot` warns *and* records the discrepancy under the case's
+  `metadata.drift.metric_scores_discrepancy` — a warning scrolls past, and an immutable
+  snapshot does not.
+
+Worked demonstration in [`../examples/noisy-golden-set/`](../examples/noisy-golden-set/README.md):
+eight cases, sampled from a pinned seed, four verdicts changed by the filter and three of
+those four were false. It includes one case where the filter hides a *real* drop, because
+at three runs and that much variance it genuinely is not separable from noise — the
+remedy there is more runs, never a smaller sigma.

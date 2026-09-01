@@ -18,7 +18,7 @@ MANIFEST_SCHEMA_FILENAME = "manifest.schema.json"
 
 #: Schema version Drift writes. A file is accepted when it shares this major version
 #: and its minor version is no newer — see `_version_problem`.
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 _MAJOR, _MINOR = (int(part) for part in SCHEMA_VERSION.split(".")[:2])
 
 #: What `drift snapshot` writes for a provenance field left unflagged. It lives here

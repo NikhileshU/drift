@@ -1,6 +1,8 @@
 # Drift schema reference — `results.json` and `manifest.json`
 
-**Status: awaiting human sign-off (spec review checkpoint 1).**
+**Status: signed off. Current version 1.1.0** — 1.1.0 added the optional per-case
+`runs` array; nothing in 1.0.0 changed type or became required, so 1.0.0 files remain
+valid.
 This is the contract every other Drift workstream is written against — the OTel /
 promptfoo / pytest adapters and the noise-aware diffing both read and write these two
 files. Changing it after sign-off is expensive, so read it as a contract, not a sketch.
@@ -38,7 +40,7 @@ that run-level fields can be added later without breaking every reader.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `schema_version` | string `"MAJOR.MINOR.PATCH"` | yes | Version of this schema the file was written against. Drift accepts any `1.x`. A different major version is rejected. |
+| `schema_version` | string `"MAJOR.MINOR.PATCH"` | yes | Version of this schema the file was written against. Drift accepts the same major version at an equal or older minor. A newer minor is rejected rather than partly read. |
 | `cases` | array, min 1 item | yes | The per-case results. `case_id` must be unique across the array. |
 | `metadata` | object | no | Free-form run-level metadata. Drift never reads it. |
 
@@ -53,9 +55,42 @@ Unknown top-level keys are **rejected**. Put extra data in `metadata`.
 | `pass` | boolean | yes | Whether the case passed. |
 | `environment` | `"golden_set"` \| `"production_sample"` | yes | Where the case was run. |
 | `timestamp` | ISO 8601 string with offset | yes | When the case was evaluated. |
+| `runs` | array, min 1 item | no | The individual repeated runs behind this case. |
 | `metadata` | object | no | Free-form per-case metadata. Drift never reads it. |
 
 Unknown per-case keys are **rejected** — see "Why strict" below.
+
+### `cases[].runs[]` — one repeated run (schema 1.1.0)
+
+Optional and additive. A case **without** `runs` is one run, whose scores are
+`metric_scores` and whose verdict is `pass` — so every file written against 1.0.0 stays
+valid and diffs to exactly the same verdicts.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `metric_scores` | object, ≥1 entry, values numeric | yes | This run's scores. Same rules as the case-level field. |
+| `pass` | boolean | yes | Whether this run passed. |
+| `timestamp` | ISO 8601 string with offset | no | When this run was evaluated. |
+| `metadata` | object | no | Free-form per-run metadata. Drift never reads it. |
+
+`case_id` and `environment` are deliberately absent: they belong to the case, and
+repeating them per run only invites them to disagree.
+
+**What Drift computes from them.** When `runs` is present, `drift diff` takes the case's
+mean and standard deviation from the runs and ignores `metric_scores` for bucketing, and
+takes the case's verdict from the **majority** of the runs' `pass` values (an exact tie
+falls back to the case-level `pass`). A score change must then clear a noise floor of
+`noise_sigma × sqrt(sd_before² + sd_after²)` — combined with the raw threshold as
+`max(threshold, floor)` — before it is called Improved or Degraded.
+
+**`metric_scores` is still required, and still means something.** It is the
+compatibility surface: any reader that knows nothing about `runs` uses it. Drift does
+not require it to equal the mean of the runs, but it checks: when the two disagree by
+more than 5×10⁻⁴, `drift snapshot` warns and records the discrepancy under the case's
+`metadata.drift.metric_scores_discrepancy`. It is written into the snapshot rather than
+only printed because snapshots are immutable and outlive the terminal a warning scrolled
+past in. The tolerance is loose enough that rounding a summary score to three decimals —
+which is ordinary — is not a discrepancy.
 
 **`case_id`.** This is the join key. `drift diff` matches cases across two snapshots by
 `case_id` and nothing else. It must be stable across commits: if a case's id changes
@@ -146,6 +181,10 @@ violations.
 * `examples/results.json` — valid, three cases, both `environment` values, offset and
   `Z` timestamps, optional metadata.
 * `examples/manifest.json` — valid, all required fields plus the optional ones.
+* `examples/noisy-golden-set/baseline.json` and `candidate.json` — valid 1.1.0, eight
+  cases carrying `runs`, including two single-run cases with no `runs` array at all so
+  the mixed shape is exercised. Generated from a pinned seed by `generate.py` in the
+  same directory.
 * `examples/results.invalid.json` — deliberately broken; validating it produces five
   errors (bad enum, non-numeric score, non-boolean `pass`, non-ISO timestamp, duplicate
   `case_id`) and is the fixture for the rejection-path test.
