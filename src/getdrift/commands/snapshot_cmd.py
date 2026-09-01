@@ -11,13 +11,12 @@ from getdrift.commands import fail
 from getdrift.gitutil import GitError, has_uncommitted_changes, head_hash
 from getdrift.paths import drift_dir
 from getdrift.schema import (
+    PLACEHOLDER,
     SCHEMA_VERSION,
     SchemaValidationError,
     validate_manifest,
     validate_results,
 )
-
-PLACEHOLDER = "unset"
 
 
 def _fail_validation(exc: SchemaValidationError, schema_name: str) -> None:

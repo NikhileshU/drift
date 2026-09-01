@@ -18,6 +18,12 @@ MANIFEST_SCHEMA_FILENAME = "manifest.schema.json"
 
 #: Schema version Drift writes. Files sharing its major version are accepted.
 SCHEMA_VERSION = "1.0.0"
+
+#: What `drift snapshot` writes for a provenance field left unflagged. It is a
+#: contract value, not a CLI detail: `drift diff` has to recognise it, because two
+#: snapshots both carrying it were graded by unknown — possibly different — judges,
+#: and comparing them as equal is exactly the false verdict Drift exists to prevent.
+PLACEHOLDER = "unset"
 _MAJOR = SCHEMA_VERSION.split(".")[0]
 
 
