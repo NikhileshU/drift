@@ -9,6 +9,7 @@ promptfoo run, just with a deterministic model stand-in.
 | `promptfooconfig.yaml` | Two tests, two named metrics (`answer_correctness`, `verbosity`). One passes, one fails. |
 | `out.json` | promptfoo 0.122.2's own output, unedited. |
 | `results.json` | What `drift ingest promptfoo` made of it. |
+| `promptfooconfig.two-providers.yaml`, `upper.js`, `out.two-providers.json` | The same eval set re-run with a second provider appended, proving that adding one **adds** cases rather than renaming the existing ones. `upper.js` is an offline custom provider so this run needs no API key either. |
 
 ## Reproduce it
 

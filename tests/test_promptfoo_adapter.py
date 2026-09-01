@@ -8,7 +8,10 @@ import pytest
 from getdrift.adapters.promptfoo import PromptfooFormatError, convert, convert_file
 from getdrift.schema import validate_results
 
-PROMPTFOO_OUT = Path(__file__).resolve().parent.parent / "examples" / "promptfoo" / "out.json"
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples" / "promptfoo"
+PROMPTFOO_OUT = EXAMPLES / "out.json"
+#: The same eval set re-run after a second provider was appended to promptfooconfig.yaml.
+PROMPTFOO_OUT_TWO_PROVIDERS = EXAMPLES / "out.two-providers.json"
 
 
 @pytest.fixture()
@@ -35,19 +38,46 @@ def test_real_promptfoo_output_converts_to_valid_results():
     assert results["metadata"]["harness"] == "promptfoo"
 
 
-def test_case_id_gains_the_axes_that_vary(promptfoo_output):
-    """A second provider makes description alone ambiguous, so the provider is appended."""
-    rows = promptfoo_output["results"]["results"]
-    second_provider = json.loads(json.dumps(rows[0]))
-    second_provider["provider"] = {"id": "openai:gpt-4o", "label": ""}
-    promptfoo_output["results"]["results"] = rows + [second_provider]
+def test_adding_a_provider_adds_cases_and_renames_none():
+    """The stability rule, proved on two real promptfoo runs of the same eval set.
 
-    ids = [case["case_id"] for case in convert(promptfoo_output)["cases"]]
-    assert ids == [
-        "refund_policy_multi_turn::echo",
-        "escalation_tone_angry_customer::echo",
+    A case_id that already exists must never change: renaming a case silently destroys
+    the snapshot history that Drift exists to preserve. Appending a provider to
+    promptfooconfig.yaml must therefore ADD cases, not re-key the existing ones.
+    """
+    before = {case["case_id"] for case in convert_file(PROMPTFOO_OUT)["cases"]}
+    after = {case["case_id"] for case in convert_file(PROMPTFOO_OUT_TWO_PROVIDERS)["cases"]}
+
+    assert before == {"refund_policy_multi_turn", "escalation_tone_angry_customer"}
+    assert before <= after, "an existing case_id changed when a provider was added"
+    assert after - before == {
+        "refund_policy_multi_turn::upper",
+        "escalation_tone_angry_customer::upper",
+    }
+
+
+def test_anchor_ignores_row_order(promptfoo_output):
+    """Rows arrive in completion order, so the anchor must key on promptIdx, not position."""
+    rows = promptfoo_output["results"]["results"]
+    extra = json.loads(json.dumps(rows[0]))
+    extra["provider"] = {"id": "openai:gpt-4o", "label": ""}
+    extra["promptIdx"] = 1
+    promptfoo_output["results"]["results"] = [extra] + rows  # new provider finishes first
+
+    ids = {case["case_id"] for case in convert(promptfoo_output)["cases"]}
+    assert ids == {
+        "refund_policy_multi_turn",
+        "escalation_tone_angry_customer",
         "refund_policy_multi_turn::openai:gpt-4o",
-    ]
+    }
+
+
+def test_provider_label_added_later_does_not_rename_a_case(promptfoo_output):
+    """case_id keys on the provider id; a label is often unset and may appear later."""
+    before = {case["case_id"] for case in convert(promptfoo_output)["cases"]}
+    for row in promptfoo_output["results"]["results"]:
+        row["provider"]["label"] = "Echo (dev)"
+    assert {case["case_id"] for case in convert(promptfoo_output)["cases"]} == before
 
 
 def test_undescribed_test_falls_back_to_a_vars_digest_not_an_index(promptfoo_output):
@@ -115,11 +145,12 @@ def test_labelled_prompt_keeps_its_name_and_its_content_hash(promptfoo_output):
     assert provenance(promptfoo_output)["prompt_version"] == "support-agent@557aa7663dd9"
 
 
-def test_multiple_providers_are_all_recorded(promptfoo_output):
+def test_multiple_providers_are_recorded_in_config_order_not_completion_order():
+    """Rows finish out of order; identical runs must still produce an identical manifest."""
     from getdrift.adapters.promptfoo import provenance
 
-    rows = promptfoo_output["results"]["results"]
-    extra = json.loads(json.dumps(rows[0]))
-    extra["provider"] = {"id": "openai:gpt-4o", "label": ""}
-    promptfoo_output["results"]["results"] = rows + [extra]
-    assert provenance(promptfoo_output)["model_version"] == "echo,openai:gpt-4o"
+    document = json.loads(PROMPTFOO_OUT_TWO_PROVIDERS.read_text())
+    assert provenance(document)["model_version"] == "echo,upper"
+
+    document["results"]["results"].reverse()
+    assert provenance(document)["model_version"] == "echo,upper"

@@ -49,33 +49,58 @@ test with no `description` falls back to `test-<12 hex of sha256(vars)>`, which 
 stable as long as the test's inputs are.
 
 A description is not unique on its own: promptfoo runs every test against every prompt
-and every provider, so a 2-provider config yields two rows per description. The adapter
-appends **only the axes that actually vary in this run**:
+and every provider, so a 2-provider config yields two rows per description. But
+**a `case_id` that already exists must never change** — renaming a case silently
+destroys the snapshot history that Drift exists to preserve, so qualifying every id the
+moment a second provider appears is not acceptable either.
 
-| Run shape | Resulting `case_id` |
+Both constraints hold at once by giving the **unqualified id to one anchor pair** and
+qualifying only the rows off it:
+
+> The anchor is the first provider crossed with the first prompt, in
+> `promptfooconfig.yaml` order. Rows on the anchor pair get the bare `description`.
+> Every other row appends whichever of provider and prompt differs from the anchor.
+
+| Run shape | Resulting `case_id`s |
 |---|---|
 | 1 prompt, 1 provider | `refund_policy_multi_turn` |
-| 2 providers, 1 prompt | `refund_policy_multi_turn::openai:gpt-4o` |
-| 2 providers, 2 prompts | `refund_policy_multi_turn::openai:gpt-4o::support-agent-v7` |
+| + a second provider appended | `refund_policy_multi_turn` **(unchanged)**, `refund_policy_multi_turn::upper` |
+| + a second prompt appended | the above, plus `refund_policy_multi_turn::prompt-b` |
 
-The single-axis case — by far the most common — gets short, readable ids that match the
-names in `promptfooconfig.yaml`.
+So adding a provider **adds** cases and renames none. The originals keep their ids and
+their whole snapshot history; the new provider's rows show up in the diff as **New**,
+which is honest, because they are new. `examples/promptfoo/out.json` and
+`out.two-providers.json` are two real runs of the same eval set that demonstrate exactly
+this, and `tests/test_promptfoo_adapter.py` asserts it.
 
-**The one caveat, stated plainly:** adding a second provider or prompt to an existing
-config changes every `case_id`, so the first diff after that shows every case as New.
-That is a one-time re-baseline, and it is the honest outcome — the run genuinely is
-measuring more cells than before. To avoid it, add the second axis in the same commit
-you re-baseline on, and give prompts explicit stable labels:
+### Why config order is a sound anchor
 
-```yaml
-prompts:
-  - id: file://support_agent.txt
-    label: support-agent      # stable across prompt-text edits
-```
+promptfoo's `results.prompts[]` is its prompt x provider expansion written in config
+order, and `promptIdx` on each row indexes into it — so index 0 is reliably
+first-provider x first-prompt. **Appending** a provider or a prompt to
+`promptfooconfig.yaml` only ever adds entries after index 0, verified against real
+promptfoo 0.122.2 output.
+
+Two details this depends on, both deliberate:
+
+* **The anchor keys on `promptIdx`, never on a row's position.** promptfoo emits rows in
+  *completion* order — with concurrency on, `results.results[0]` is simply whichever
+  cell finished first, and anchoring on it would make ids non-deterministic between
+  identical runs.
+* **It keys on the provider's `id`, never its `label`.** Labels are frequently unset,
+  and adding one later would otherwise rename every case that provider produced.
+
+**The one case that does still re-key: reordering or prepending** a provider or prompt
+in `promptfooconfig.yaml`, which moves the anchor. That is the same contract as the
+description itself — the names in your config are part of your cases' identity, so
+changing them changes identity. Append new providers and prompts at the end. Making
+even that survive would mean reading the previous snapshot to see which pair held the
+bare id, i.e. stateful ingestion coupled to Drift's storage; not worth it until someone
+hits it.
 
 Label your prompts. Without a label promptfoo uses the raw prompt text as the label, so
-editing a prompt renames the case — and prompt edits are precisely what you want to
-diff across. (The prompt's own version belongs in the manifest's `prompt_version`.)
+a qualified id would carry the whole prompt in it. (The prompt's own version belongs in
+the manifest's `prompt_version`.)
 
 ### `metric_scores`
 

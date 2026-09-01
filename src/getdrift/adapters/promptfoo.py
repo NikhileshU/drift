@@ -57,9 +57,11 @@ def _test_name(row: Dict[str, Any]) -> str:
 
 
 def _provider(row: Dict[str, Any]) -> str:
+    """The provider's stable id. Not its label — a label is often unset, and adding
+    one later would rename every case that provider produced."""
     provider = row.get("provider")
     if isinstance(provider, dict):
-        return str(provider.get("label") or provider.get("id") or "")
+        return str(provider.get("id") or provider.get("label") or "")
     return str(provider or "")
 
 
@@ -157,6 +159,43 @@ def _judge_version(rows: List[Dict[str, Any]]) -> str:
     return "promptfoo-asserts:sha256:" + _digest(sorted(assertions, key=lambda a: json.dumps(a, sort_keys=True, default=str)))
 
 
+def _anchor(rows: List[Dict[str, Any]]) -> tuple:
+    """The (provider, prompt) pair that holds the unqualified case_id.
+
+    `promptIdx` indexes promptfoo's prompt x provider expansion, which is written in
+    config order, so index 0 is the first provider crossed with the first prompt.
+    Appending a provider or a prompt to promptfooconfig.yaml only ever adds entries
+    after it, which is what keeps existing case_ids stable.
+
+    Rows themselves arrive in *completion* order, not config order, so this must key on
+    promptIdx and never on position in the array. Ties are broken lexicographically so
+    the anchor cannot depend on which provider happened to finish first.
+    """
+    lowest = min(row.get("promptIdx", 0) or 0 for row in rows)
+    return min(
+        (_provider(row), _prompt_label(row))
+        for row in rows
+        if (row.get("promptIdx", 0) or 0) == lowest
+    )
+
+
+def _case_id(row: Dict[str, Any], anchor: tuple) -> str:
+    """`<description>`, qualified only for rows off the anchor pair.
+
+    A case_id that already exists must never change, because renaming a case destroys
+    the snapshot history that Drift exists to preserve. So adding a second provider
+    ADDS `<description>::<provider>` cases and leaves the originals untouched, rather
+    than qualifying everything at once.
+    """
+    provider, prompt_label = _provider(row), _prompt_label(row)
+    parts = [_test_name(row)]
+    if provider != anchor[0]:
+        parts.append(provider)
+    if prompt_label != anchor[1]:
+        parts.append(prompt_label)
+    return "::".join(parts)
+
+
 def provenance(document: Any) -> Dict[str, str]:
     """The three manifest fields `drift snapshot` asks for, derived from promptfoo.
 
@@ -164,12 +203,15 @@ def provenance(document: Any) -> Dict[str, str]:
     placeholder that makes Drift's comparability check useless.
     """
     rows = _rows(document)
-    providers = []
+    # Ordered by promptIdx, i.e. config order — rows arrive in completion order, so
+    # taking them as they come would make model_version differ between identical runs.
+    first_seen: Dict[str, int] = {}
     for row in rows:
-        provider = row.get("provider")
-        name = str(provider.get("id") or provider.get("label") or "") if isinstance(provider, dict) else str(provider or "")
-        if name and name not in providers:
-            providers.append(name)
+        name = _provider(row)
+        if name:
+            index = row.get("promptIdx", 0) or 0
+            first_seen[name] = min(first_seen.get(name, index), index)
+    providers = sorted(first_seen, key=lambda name: (first_seen[name], name))
     prompts = _prompt_versions(document, rows)
     return {
         "model_version": ",".join(providers) or "unset",
@@ -188,19 +230,16 @@ def convert(
     if not rows:
         raise PromptfooFormatError("the promptfoo output contains no result rows.")
 
-    # Only disambiguate case_ids by the axes that actually vary in this run, so the
-    # common single-prompt/single-provider config keeps the readable names from
-    # promptfooconfig.yaml. See docs/promptfoo-mapping.md for the re-baseline caveat.
-    axes = [
-        field
-        for field in (_provider, _prompt_label)
-        if len({field(row) for row in rows}) > 1
-    ]
+    # ponytail: the anchor is config order, which is stable under appending a provider
+    # or a prompt but not under reordering or prepending one. Making it survive that too
+    # would mean reading the previous snapshot to see which pair held the bare id, i.e.
+    # stateful ingestion coupled to Drift's storage — not worth it until someone hits it.
+    anchor = _anchor(rows)
     timestamp = _run_timestamp(document)
 
     cases = []
     for row in rows:
-        case_id = "::".join([_test_name(row)] + [field(row) for field in axes])
+        case_id = _case_id(row, anchor)
         cases.append(
             {
                 "case_id": case_id,

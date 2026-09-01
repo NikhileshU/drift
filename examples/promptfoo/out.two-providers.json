@@ -1,0 +1,710 @@
+{
+  "evalId": "eval-rUG-2026-09-01T10:20:38",
+  "results": {
+    "version": 3,
+    "timestamp": "2026-09-01T10:20:38.176Z",
+    "prompts": [
+      {
+        "id": "557aa7663dd953f3e4ca594ef26122f301f7dba28ca413f5a7d7ce3258bd5e94",
+        "raw": "{{answer}}",
+        "label": "{{answer}}",
+        "provider": "echo",
+        "metrics": {
+          "score": 1,
+          "testPassCount": 1,
+          "testFailCount": 1,
+          "testErrorCount": 0,
+          "assertPassCount": 1,
+          "assertFailCount": 1,
+          "totalLatencyMs": 3,
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 2,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "namedScores": {
+            "answer_correctness": 1
+          },
+          "namedScoresCount": {
+            "answer_correctness": 2
+          },
+          "namedScoreWeights": {
+            "answer_correctness": 2
+          },
+          "cost": 0
+        }
+      },
+      {
+        "id": "557aa7663dd953f3e4ca594ef26122f301f7dba28ca413f5a7d7ce3258bd5e94",
+        "raw": "{{answer}}",
+        "label": "{{answer}}",
+        "provider": "upper",
+        "metrics": {
+          "score": 0,
+          "testPassCount": 0,
+          "testFailCount": 2,
+          "testErrorCount": 0,
+          "assertPassCount": 0,
+          "assertFailCount": 2,
+          "totalLatencyMs": 2,
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 2,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "namedScores": {
+            "answer_correctness": 0
+          },
+          "namedScoresCount": {
+            "answer_correctness": 2
+          },
+          "namedScoreWeights": {
+            "answer_correctness": 2
+          },
+          "cost": 0
+        }
+      }
+    ],
+    "results": [
+      {
+        "cost": 0,
+        "error": "Expected output to contain \"30 days\"",
+        "gradingResult": {
+          "pass": false,
+          "score": 0,
+          "reason": "Expected output to contain \"30 days\"",
+          "namedScores": {
+            "answer_correctness": 0
+          },
+          "namedScoreWeights": {
+            "answer_correctness": 1
+          },
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": false,
+              "score": 0,
+              "reason": "Expected output to contain \"30 days\"",
+              "assertion": {
+                "type": "contains",
+                "value": "30 days",
+                "metric": "answer_correctness"
+              }
+            }
+          ]
+        },
+        "id": "dddb24af-e38e-4642-8782-6084fd241d94",
+        "latencyMs": 1,
+        "namedScores": {
+          "answer_correctness": 0
+        },
+        "prompt": {
+          "raw": "Our refund window is 30 days from delivery.",
+          "label": "{{answer}}",
+          "config": {}
+        },
+        "promptId": "557aa7663dd953f3e4ca594ef26122f301f7dba28ca413f5a7d7ce3258bd5e94",
+        "promptIdx": 1,
+        "provider": {
+          "id": "upper",
+          "label": ""
+        },
+        "response": {
+          "output": "OUR REFUND WINDOW IS 30 DAYS FROM DELIVERY."
+        },
+        "score": 0,
+        "success": false,
+        "testCase": {
+          "description": "refund_policy_multi_turn",
+          "vars": {
+            "answer": "Our refund window is 30 days from delivery."
+          },
+          "assert": [
+            {
+              "type": "contains",
+              "value": "30 days",
+              "metric": "answer_correctness"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 0,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "answer": "Our refund window is 30 days from delivery."
+        },
+        "metadata": {
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 1
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {
+            "answer_correctness": 1
+          },
+          "namedScoreWeights": {
+            "answer_correctness": 1
+          },
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "contains",
+                "value": "30 days",
+                "metric": "answer_correctness"
+              }
+            }
+          ]
+        },
+        "id": "c544cc48-18d7-4fda-b1b0-e7500191677b",
+        "latencyMs": 2,
+        "namedScores": {
+          "answer_correctness": 1
+        },
+        "prompt": {
+          "raw": "Our refund window is 30 days from delivery.",
+          "label": "{{answer}}",
+          "config": {}
+        },
+        "promptId": "557aa7663dd953f3e4ca594ef26122f301f7dba28ca413f5a7d7ce3258bd5e94",
+        "promptIdx": 0,
+        "provider": {
+          "id": "echo",
+          "label": ""
+        },
+        "response": {
+          "output": "Our refund window is 30 days from delivery.",
+          "raw": "Our refund window is 30 days from delivery.",
+          "cost": 0,
+          "cached": false,
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "isRefusal": false,
+          "metadata": {}
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "refund_policy_multi_turn",
+          "vars": {
+            "answer": "Our refund window is 30 days from delivery."
+          },
+          "assert": [
+            {
+              "type": "contains",
+              "value": "30 days",
+              "metric": "answer_correctness"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 0,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "answer": "Our refund window is 30 days from delivery."
+        },
+        "metadata": {
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "error": "Expected output to contain \"I understand\"",
+        "gradingResult": {
+          "pass": false,
+          "score": 0,
+          "reason": "Expected output to contain \"I understand\"",
+          "namedScores": {
+            "answer_correctness": 0
+          },
+          "namedScoreWeights": {
+            "answer_correctness": 1
+          },
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": false,
+              "score": 0,
+              "reason": "Expected output to contain \"I understand\"",
+              "assertion": {
+                "type": "contains",
+                "value": "I understand",
+                "metric": "answer_correctness"
+              }
+            }
+          ]
+        },
+        "id": "e5d79d8f-295e-4c4a-a3ad-f421dc62de34",
+        "latencyMs": 1,
+        "namedScores": {
+          "answer_correctness": 0
+        },
+        "prompt": {
+          "raw": "Calm down.",
+          "label": "{{answer}}",
+          "config": {}
+        },
+        "promptId": "557aa7663dd953f3e4ca594ef26122f301f7dba28ca413f5a7d7ce3258bd5e94",
+        "promptIdx": 1,
+        "provider": {
+          "id": "upper",
+          "label": ""
+        },
+        "response": {
+          "output": "CALM DOWN."
+        },
+        "score": 0,
+        "success": false,
+        "testCase": {
+          "description": "escalation_tone_angry_customer",
+          "vars": {
+            "answer": "Calm down."
+          },
+          "assert": [
+            {
+              "type": "contains",
+              "value": "I understand",
+              "metric": "answer_correctness"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 1,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "answer": "Calm down."
+        },
+        "metadata": {
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 1
+      },
+      {
+        "cost": 0,
+        "error": "Expected output to contain \"I understand\"",
+        "gradingResult": {
+          "pass": false,
+          "score": 0,
+          "reason": "Expected output to contain \"I understand\"",
+          "namedScores": {
+            "answer_correctness": 0
+          },
+          "namedScoreWeights": {
+            "answer_correctness": 1
+          },
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": false,
+              "score": 0,
+              "reason": "Expected output to contain \"I understand\"",
+              "assertion": {
+                "type": "contains",
+                "value": "I understand",
+                "metric": "answer_correctness"
+              }
+            }
+          ]
+        },
+        "id": "bd83bd7c-d19f-45a6-9b20-21079282a1df",
+        "latencyMs": 1,
+        "namedScores": {
+          "answer_correctness": 0
+        },
+        "prompt": {
+          "raw": "Calm down.",
+          "label": "{{answer}}",
+          "config": {}
+        },
+        "promptId": "557aa7663dd953f3e4ca594ef26122f301f7dba28ca413f5a7d7ce3258bd5e94",
+        "promptIdx": 0,
+        "provider": {
+          "id": "echo",
+          "label": ""
+        },
+        "response": {
+          "output": "Calm down.",
+          "raw": "Calm down.",
+          "cost": 0,
+          "cached": false,
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "isRefusal": false,
+          "metadata": {}
+        },
+        "score": 0,
+        "success": false,
+        "testCase": {
+          "description": "escalation_tone_angry_customer",
+          "vars": {
+            "answer": "Calm down."
+          },
+          "assert": [
+            {
+              "type": "contains",
+              "value": "I understand",
+              "metric": "answer_correctness"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 1,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "answer": "Calm down."
+        },
+        "metadata": {
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 1
+      }
+    ],
+    "stats": {
+      "successes": 1,
+      "failures": 3,
+      "errors": 0,
+      "tokenUsage": {
+        "prompt": 0,
+        "completion": 0,
+        "cached": 0,
+        "total": 0,
+        "numRequests": 4,
+        "completionDetails": {
+          "reasoning": 0,
+          "acceptedPrediction": 0,
+          "rejectedPrediction": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0
+        },
+        "assertions": {
+          "total": 0,
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "numRequests": 0,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          }
+        }
+      },
+      "durationMs": 23,
+      "evaluationDurationMs": 23
+    }
+  },
+  "config": {
+    "tags": {},
+    "description": "Drift sample eval",
+    "prompts": [
+      "{{answer}}"
+    ],
+    "providers": [
+      {
+        "id": "echo"
+      },
+      {
+        "id": "file://upper.js"
+      }
+    ],
+    "tests": [
+      {
+        "description": "refund_policy_multi_turn",
+        "vars": {
+          "answer": "Our refund window is 30 days from delivery."
+        },
+        "assert": [
+          {
+            "type": "contains",
+            "value": "30 days",
+            "metric": "answer_correctness"
+          }
+        ]
+      },
+      {
+        "description": "escalation_tone_angry_customer",
+        "vars": {
+          "answer": "Calm down."
+        },
+        "assert": [
+          {
+            "type": "contains",
+            "value": "I understand",
+            "metric": "answer_correctness"
+          }
+        ]
+      }
+    ],
+    "env": {},
+    "outputPath": [
+      "two.json"
+    ],
+    "extensions": [],
+    "metadata": {},
+    "evaluateOptions": {}
+  },
+  "shareableUrl": null,
+  "metadata": {
+    "promptfooVersion": "0.122.2",
+    "nodeVersion": "v26.4.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "exportedAt": "2026-09-01T10:20:38.230Z",
+    "evaluationCreatedAt": "2026-09-01T10:20:38.176Z"
+  },
+  "vars": [
+    "answer"
+  ],
+  "runtimeOptions": {
+    "eventSource": "cli",
+    "showProgressBar": true,
+    "repeat": 1,
+    "maxConcurrency": 4,
+    "cache": false
+  }
+}
