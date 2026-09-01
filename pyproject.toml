@@ -23,6 +23,9 @@ dependencies = [
   "jsonschema>=4.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
 [project.scripts]
 drift = "getdrift.cli:main"
 
