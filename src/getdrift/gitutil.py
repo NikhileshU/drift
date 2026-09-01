@@ -42,3 +42,8 @@ def head_hash() -> str:
             "Could not read the current commit (`git rev-parse HEAD`). "
             "Are you inside a git repository with at least one commit?"
         ) from exc
+
+
+def has_uncommitted_changes() -> bool:
+    """True when tracked files differ from HEAD, so HEAD does not describe the tree."""
+    return bool(_git("status", "--porcelain", "--untracked-files=no"))
