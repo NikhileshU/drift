@@ -59,7 +59,8 @@ def snapshot(
         for problem in exc.problems:
             typer.secho(f"  - {problem}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-
+    for warning in snap.warnings:
+        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
     if snap.dirty:
         typer.secho(
             "warning: the working tree has uncommitted changes, so this snapshot is "

@@ -15,3 +15,15 @@ model_config: {}
 # Score delta that counts as Improved / Degraded in `drift diff`.
 # Uncomment to override the built-in default of 0.05; --threshold overrides both.
 # diff_threshold: 0.05
+
+# How many times the harness is expected to run each eval case. Drift does not run
+# your evals — this is the count it expects to find in each case's `runs` array, and
+# `drift snapshot` warns when a case carries fewer. Repeating a case is what makes a
+# regression separable from sampling noise; at N=1 there is no noise estimate at all.
+# runs_per_case: 3
+
+# How many combined standard deviations a score change must clear before `drift diff`
+# will call it Improved or Degraded. Lower this and sampling noise starts reading as
+# regressions; the remedy for a change you believe is real but cannot clear the floor
+# is more runs, not a smaller sigma. `--noise-sigma` overrides it.
+# noise_sigma: 2.0

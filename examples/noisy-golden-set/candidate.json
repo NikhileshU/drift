@@ -1,0 +1,221 @@
+{
+  "schema_version": "1.1.0",
+  "cases": [
+    {
+      "case_id": "real-drop-clean",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.592
+      },
+      "pass": true,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.599
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.59
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.586
+          },
+          "pass": true
+        }
+      ]
+    },
+    {
+      "case_id": "noise-swing",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.597
+      },
+      "pass": true,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.506
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.64
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.644
+          },
+          "pass": true
+        }
+      ]
+    },
+    {
+      "case_id": "flaky-pass",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.707
+      },
+      "pass": false,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.728
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.714
+          },
+          "pass": false
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.678
+          },
+          "pass": true
+        }
+      ]
+    },
+    {
+      "case_id": "real-fail",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.398
+      },
+      "pass": false,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.402
+          },
+          "pass": false
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.409
+          },
+          "pass": false
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.382
+          },
+          "pass": false
+        }
+      ]
+    },
+    {
+      "case_id": "real-gain-clean",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.81
+      },
+      "pass": true,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.82
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.799
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.81
+          },
+          "pass": true
+        }
+      ]
+    },
+    {
+      "case_id": "small-drift-noisy",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.598
+      },
+      "pass": true,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.59
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.579
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.625
+          },
+          "pass": true
+        }
+      ]
+    },
+    {
+      "case_id": "legacy-n1",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.7
+      },
+      "pass": true
+    },
+    {
+      "case_id": "mixed-n",
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metric_scores": {
+        "accuracy": 0.619
+      },
+      "pass": true,
+      "runs": [
+        {
+          "metric_scores": {
+            "accuracy": 0.951
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.553
+          },
+          "pass": true
+        },
+        {
+          "metric_scores": {
+            "accuracy": 0.352
+          },
+          "pass": true
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "harness": "drift noisy-golden-set generator",
+    "seed": 20260901
+  }
+}

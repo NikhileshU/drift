@@ -33,12 +33,38 @@ score delta that counts as Improved/Degraded (default 0.05, or `diff_threshold` 
 |---|---|
 | Fixed | hash1 fail → hash2 pass |
 | Regressed | hash1 pass → hash2 fail |
-| Improved | both pass, score delta > threshold |
-| Degraded | both pass, score delta < −threshold |
-| Unchanged | delta within threshold |
+| Improved | both pass, score delta clears the threshold *and* the noise floor |
+| Degraded | both pass, negative delta clears the threshold *and* the noise floor |
+| Unchanged | delta clears neither |
 | New | `case_id` not present in hash1 |
 
-Score delta is the mean over metrics present in **both** snapshots.
+Score delta is the mean over metrics present in **both** snapshots. "Pass" is the
+majority verdict across a case's runs, so one flaky failure is not a regression.
+
+## Noise-aware diffing
+
+An LLM eval scored once is a sample, not a measurement. Run each case N times and put
+the runs in the results file, and `drift diff` computes a mean and a standard deviation
+per case and requires a change to clear the sampling noise before calling it Improved or
+Degraded:
+
+```
+noise_floor       = noise_sigma × sqrt(sd_before² + sd_after²)      # default sigma 2.0
+effective cutoff  = max(diff_threshold, noise_floor)
+```
+
+Cases the floor withholds are still listed, with their real deltas, under a line saying
+how many moved and which. Suppressed is not hidden.
+
+A case with no `runs` array is one run: standard deviation 0, floor 0, and therefore
+exactly the pre-1.1.0 behaviour. `--noise-sigma 0` turns the floor off entirely.
+
+Set `runs_per_case` (default 3) and `noise_sigma` (default 2.0) in `.drift/config.yaml`.
+Drift does not run your evals, so `runs_per_case` is the count it *expects* to find;
+`drift snapshot` warns when a case carries fewer.
+
+Worked demonstration, eight cases, four verdicts changed:
+[`examples/noisy-golden-set/`](examples/noisy-golden-set/README.md).
 
 ## Comparability
 
@@ -74,3 +100,5 @@ Both snapshots there use `rubric-v1`, so all six buckets are reported. Change on
 
 - [`docs/schema.md`](docs/schema.md) — the `results.json` / `manifest.json` contract, field by field.
 - [`docs/comparability.md`](docs/comparability.md) — when and why `drift diff` withholds a verdict.
+- [`examples/noisy-golden-set/`](examples/noisy-golden-set/README.md) — noise-aware diffing, demonstrated.
+- [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md) — **read the `drift init` note before upgrading.**

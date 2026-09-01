@@ -10,6 +10,7 @@ from rich.table import Table
 from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.diffing import (
     BUCKET_ORDER,
+    DEFAULT_NOISE_SIGMA,
     DEFAULT_THRESHOLD,
     UNKNOWN,
     CaseDiff,
@@ -43,6 +44,36 @@ def _threshold(drift: Path, override: Optional[float]) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return DEFAULT_THRESHOLD
+
+
+def _noise_sigma(drift: Path, override: Optional[float]) -> float:
+    if override is not None:
+        return override
+    value = read_config(drift).get("noise_sigma")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return DEFAULT_NOISE_SIGMA
+
+
+def _filtered_note(console: Console, diffs: List[CaseDiff]) -> None:
+    """Say what the noise filter withheld, and why. Suppressed is not hidden.
+
+    Two separate reasons, reported separately: a score that moved past the raw
+    threshold but stayed inside the noise floor, and a pass flip that did not survive
+    the majority across runs. Both cases still appear in Unchanged with their real
+    numbers; this is the line that stops them looking like nothing happened.
+    """
+    noisy = [c for c in diffs if c.noise_filtered]
+    flips = [c for c in diffs if c.pass_flip_filtered]
+    for cases, reason in (
+        (noisy, "moved past the threshold but stayed inside the noise floor"),
+        (flips, "had a pass flip that did not survive the majority across runs"),
+    ):
+        if cases:
+            console.print(
+                f"[dim]{len(cases)} case(s) {reason}: "
+                f"{', '.join(sorted(c.case_id for c in cases))}[/dim]"
+            )
 
 
 def _cell(value: Optional[float]) -> str:
@@ -160,6 +191,14 @@ def diff(
         help=f"Score delta that counts as Improved/Degraded. Defaults to "
         f"`diff_threshold` in .drift/config.yaml, else {DEFAULT_THRESHOLD}.",
     ),
+    noise_sigma: Optional[float] = typer.Option(
+        None,
+        "--noise-sigma",
+        help=f"How many combined standard deviations a change must clear before it is "
+        f"called Improved/Degraded. Defaults to `noise_sigma` in .drift/config.yaml, "
+        f"else {DEFAULT_NOISE_SIGMA}. Pass 0 to disable the noise filter and bucket on "
+        f"the raw threshold alone.",
+    ),
 ) -> None:
     """Diff two snapshots into Fixed/Regressed/Improved/Degraded/Unchanged/New."""
     try:
@@ -175,14 +214,17 @@ def diff(
         fail(f"both arguments resolve to the same snapshot ({before.path.name})")
 
     resolved_threshold = _threshold(drift, threshold)
-    diffs, removed = compare(before.results, after.results, resolved_threshold)
+    resolved_sigma = _noise_sigma(drift, noise_sigma)
+    diffs, removed = compare(
+        before.results, after.results, resolved_threshold, resolved_sigma
+    )
 
     comparability = judge_comparability(before.manifest, after.manifest)
 
     console = Console(highlight=False)
     console.print(
         f"\n[bold]{before.path.name[:12]}[/bold] → [bold]{after.path.name[:12]}[/bold]  "
-        f"[dim]threshold {resolved_threshold}[/dim]\n"
+        f"[dim]threshold {resolved_threshold}  noise {resolved_sigma}\u03c3[/dim]\n"
     )
     _provenance(console, before, after)
     console.print()
@@ -197,6 +239,7 @@ def diff(
                 "check them.[/yellow]\n"
             )
         _buckets(console, diffs)
+        _filtered_note(console, diffs)
 
     if removed:
         console.print(

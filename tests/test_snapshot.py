@@ -144,3 +144,77 @@ def test_dirty_tree_snapshots_but_warns(git_repo, example_results):
     result = runner.invoke(app, ["snapshot", "--results-file", str(path)])
     assert result.exit_code == 0
     assert "uncommitted changes" in result.output
+
+
+def test_a_real_score_discrepancy_is_recorded_in_the_snapshot(git_repo):
+    """D1: a warning scrolls past, but an immutable snapshot outlives the terminal."""
+    from typer.testing import CliRunner
+
+    from getdrift.cli import app
+
+    runner = CliRunner()
+    runner.invoke(app, ["init"])
+    results = {
+        "schema_version": "1.1.0",
+        "cases": [{
+            "case_id": "c",
+            "metric_scores": {"accuracy": 0.90},  # the runs average 0.50
+            "pass": True,
+            "environment": "golden_set",
+            "timestamp": "2026-09-01T09:41:02Z",
+            "runs": [
+                {"metric_scores": {"accuracy": 0.40}, "pass": True},
+                {"metric_scores": {"accuracy": 0.60}, "pass": True},
+            ],
+        }],
+    }
+    path = git_repo / "results.json"
+    path.write_text(json.dumps(results))
+    result = runner.invoke(app, ["snapshot", "--results-file", str(path)])
+    assert result.exit_code == 0
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True
+    ).stdout.strip()
+    written = json.loads(
+        (git_repo / ".drift" / "snapshots" / commit / "results.json").read_text()
+    )
+    recorded = written["cases"][0]["metadata"]["drift"]["metric_scores_discrepancy"]
+    assert recorded["accuracy"]["reported"] == 0.90
+    assert recorded["accuracy"]["runs_mean"] == 0.50
+
+
+def test_rounding_a_summary_score_is_not_a_discrepancy(git_repo):
+    """A harness printing three decimals must not warn on every single case."""
+    from typer.testing import CliRunner
+
+    from getdrift.cli import app
+
+    runner = CliRunner()
+    runner.invoke(app, ["init"])
+    results = {
+        "schema_version": "1.1.0",
+        "cases": [{
+            "case_id": "c",
+            "metric_scores": {"accuracy": 0.667},  # true mean 0.6666...
+            "pass": True,
+            "environment": "golden_set",
+            "timestamp": "2026-09-01T09:41:02Z",
+            "runs": [
+                {"metric_scores": {"accuracy": 0.6}, "pass": True},
+                {"metric_scores": {"accuracy": 0.7}, "pass": True},
+                {"metric_scores": {"accuracy": 0.7}, "pass": True},
+            ],
+        }],
+    }
+    path = git_repo / "results.json"
+    path.write_text(json.dumps(results))
+    result = runner.invoke(app, ["snapshot", "--results-file", str(path)])
+    assert "disagree with the mean" not in result.output
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True
+    ).stdout.strip()
+    written = json.loads(
+        (git_repo / ".drift" / "snapshots" / commit / "results.json").read_text()
+    )
+    assert "metadata" not in written["cases"][0]

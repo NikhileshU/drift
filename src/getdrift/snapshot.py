@@ -8,15 +8,16 @@ tox/CI/editable layouts a pytest plugin lives in — and would flatten these typ
 exceptions into an exit code plus a parsed stderr string.
 """
 
+import copy
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from getdrift import __version__
 from getdrift.gitutil import has_uncommitted_changes, head_hash
-from getdrift.paths import drift_dir
+from getdrift.paths import drift_dir, read_config
 from getdrift.schema import (
     PLACEHOLDER,
     SCHEMA_VERSION,
@@ -62,6 +63,9 @@ class Snapshot:
     manifest: Optional[Dict[str, Any]] = None
     #: Whether the working tree had uncommitted changes when this was written.
     dirty: bool = False
+    #: Non-fatal things worth telling the caller: too few runs, scores that disagree
+    #: with their own runs. The snapshot is written either way.
+    warnings: List[str] = field(default_factory=list)
 
 
 def _now() -> str:
@@ -77,6 +81,65 @@ def _read_json(path: Path) -> Dict[str, Any]:
         raise ResultsFileError(f"{path} does not exist") from exc
     except json.JSONDecodeError as exc:
         raise ResultsFileError(f"{path} is not valid JSON: {exc}") from exc
+
+
+#: Expected repeated runs per case when `.drift/config.yaml` does not say.
+DEFAULT_RUNS_PER_CASE = 3
+
+#: Tolerance for `metric_scores` disagreeing with the mean of `runs`. Loose enough to
+#: absorb a harness rounding its summary scores to three decimals, which is ordinary and
+#: not worth a warning. This check is for real disagreement — a different aggregation, a
+#: stale summary, a hand-edited file — not for how a number was printed.
+_TOLERANCE = 5e-4
+
+
+def _reconcile_runs(document: Dict[str, Any], expected: int) -> List[str]:
+    """Check each case's runs against its summary scores, annotating any disagreement.
+
+    `drift diff` recomputes a case's mean from `runs` when they are present, so a
+    `metric_scores` that disagrees with them is never what a verdict is drawn from —
+    but it is what any reader who does not know about `runs` will use. A stderr warning
+    is not enough on its own: snapshots are immutable and outlive the terminal the
+    warning scrolled past in, so the discrepancy is recorded in the case's own metadata
+    where it can still be found later.
+    """
+    warnings, thin, mismatched = [], [], []
+    for case in document.get("cases", []):
+        runs = case.get("runs")
+        if not runs:
+            thin.append(case["case_id"])
+            continue
+        if len(runs) < expected:
+            thin.append(case["case_id"])
+        discrepancies = {}
+        for metric, reported in case["metric_scores"].items():
+            values = [r["metric_scores"][metric] for r in runs if metric in r["metric_scores"]]
+            if not values:
+                continue
+            actual = sum(values) / len(values)
+            if abs(actual - reported) > _TOLERANCE:
+                discrepancies[metric] = {"reported": reported, "runs_mean": actual}
+        if discrepancies:
+            mismatched.append(case["case_id"])
+            # Namespaced so it cannot collide with whatever the harness puts here.
+            case.setdefault("metadata", {}).setdefault("drift", {})[
+                "metric_scores_discrepancy"
+            ] = discrepancies
+    if thin:
+        warnings.append(
+            f"{len(thin)} case(s) carry fewer than the expected {expected} runs "
+            f"({', '.join(sorted(thin)[:3])}{', ...' if len(thin) > 3 else ''}). "
+            "Drift can only separate a real change from sampling noise when a case is "
+            "run more than once; with one run there is no noise estimate at all."
+        )
+    if mismatched:
+        warnings.append(
+            f"{len(mismatched)} case(s) have metric_scores that disagree with the mean "
+            f"of their own runs ({', '.join(sorted(mismatched)[:3])}"
+            f"{', ...' if len(mismatched) > 3 else ''}). Drift diffs the runs, and has "
+            "recorded the discrepancy in each case's metadata.drift."
+        )
+    return warnings
 
 
 def create_snapshot(
@@ -106,11 +169,18 @@ def create_snapshot(
         )
 
     if isinstance(results, dict):
-        document, source = results, "<in-memory results>"
+        # Copied because the reconciliation below annotates it; a caller's dict is
+        # theirs, not ours to write into.
+        document, source = copy.deepcopy(results), "<in-memory results>"
     else:
         source = str(results)
         document = _read_json(Path(results))
     validate_results(document, source=source, drift_dir=base)
+
+    expected = read_config(base).get("runs_per_case")
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
+        expected = DEFAULT_RUNS_PER_CASE
+    warnings = _reconcile_runs(document, expected)
 
     # Immutability: one commit, one snapshot, never rewritten. There is deliberately
     # no force option — overwriting would make every past diff unreproducible.
@@ -135,7 +205,7 @@ def create_snapshot(
     target.mkdir(parents=True)
     for name, doc in (("results.json", document), ("manifest.json", manifest)):
         (target / name).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    return Snapshot(target, commit, document, manifest, dirty)
+    return Snapshot(target, commit, document, manifest, dirty, warnings)
 
 
 def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
