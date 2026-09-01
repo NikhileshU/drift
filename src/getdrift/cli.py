@@ -3,6 +3,9 @@
 import typer
 
 from getdrift import __version__
+from getdrift.commands.diff_cmd import diff
+from getdrift.commands.init_cmd import init
+from getdrift.commands.snapshot_cmd import snapshot
 
 app = typer.Typer(
     name="drift",
@@ -25,6 +28,11 @@ def _root(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()
+
+
+app.command("init")(init)
+app.command("snapshot")(snapshot)
+app.command("diff")(diff)
 
 
 def main() -> None:
