@@ -143,3 +143,122 @@ def test_provenance_flags_reach_the_manifest(eval_repo):
     assert manifest["judge_version"] == "rubric@v3"
     assert manifest["model_version"] == "claude-opus-5"
     assert manifest["prompt_version"] == "unset"
+
+
+SKIP_SUITE = '''
+import pytest
+
+def test_plain_pass():
+    assert True
+
+@pytest.mark.skip(reason="decorator form")
+def test_decorator_skip():
+    assert True
+
+def test_runtime_skip():
+    pytest.skip("runtime form")
+
+@pytest.mark.xfail(reason="known regression")
+def test_xfail():
+    assert False
+
+@pytest.mark.xfail(reason="marker left behind")
+def test_xpass():
+    assert True
+'''
+
+
+def test_both_skip_mechanisms_are_excluded(eval_repo):
+    """A skipped test produced no verdict, whichever way it was skipped.
+
+    Recording only the runtime form made ADDING a `pytest.skip()` show up as Regressed
+    and removing it as Fixed — the exact false signal Drift exists to suppress.
+    """
+    (eval_repo / "tests" / "test_evals.py").write_text(SKIP_SUITE)
+    commit = _init_drift(eval_repo)
+    _run_pytest(eval_repo)
+
+    cases = {c["case_id"].split("::")[1]: c for c in _snapshot(eval_repo, commit)["cases"]}
+    assert "test_decorator_skip" not in cases
+    assert "test_runtime_skip" not in cases, "a runtime pytest.skip() is still a skip"
+    # xfail is not a skip: it ran and it failed, so it stays visible as a failing case
+    # rather than silently vanishing from the diff.
+    assert cases["test_xfail"]["pass"] is False
+    assert cases["test_xpass"]["pass"] is True
+    assert cases["test_plain_pass"]["pass"] is True
+
+
+def test_a_non_benign_snapshot_error_is_loud(eval_repo):
+    """Only SnapshotExistsError is benign. A policy rejection must not look routine."""
+    (eval_repo / "conftest.py").write_text('''
+import getdrift.pytest_plugin as plugin
+from getdrift.snapshot import SnapshotError
+
+class MissingJudgeVersionError(SnapshotError):
+    pass
+
+def _refuse(*args, **kwargs):
+    raise MissingJudgeVersionError("judge_version is required by .drift/config.yaml")
+
+plugin.create_snapshot = _refuse
+''')
+    _init_drift(eval_repo)
+    result = _run_pytest(eval_repo)
+
+    assert result.returncode == 0, "a refused snapshot must not fail the suite"
+    assert "no snapshot written" in result.stdout
+    assert "judge_version is required" in result.stdout
+
+
+def test_warning_filters_cannot_fail_the_suite(eval_repo):
+    """Under -W error, warnings.warn in session teardown would break a passing run."""
+    (eval_repo / "conftest.py").write_text('''
+import getdrift.pytest_plugin as plugin
+from getdrift.snapshot import SnapshotError
+
+def _refuse(*args, **kwargs):
+    raise SnapshotError("refused")
+
+plugin.create_snapshot = _refuse
+''')
+    _init_drift(eval_repo)
+    result = _run_pytest(eval_repo, "-W", "error")
+
+    assert result.returncode == 0
+    assert "no snapshot written" in result.stdout, "still visible despite the filter"
+
+
+def test_an_unserialisable_record_property_value_costs_nothing(eval_repo):
+    """record_property takes any object; reaching json.dumps would break the run."""
+    (eval_repo / "tests" / "test_evals.py").write_text('''
+class Thing:
+    pass
+
+def test_ok(record_property):
+    record_property("drift.metadata.obj", Thing())
+    assert True
+''')
+    commit = _init_drift(eval_repo)
+    result = _run_pytest(eval_repo)
+
+    assert result.returncode == 0
+    case = _snapshot(eval_repo, commit)["cases"][0]
+    # Coerced, not dropped — the value is still worth having.
+    assert "Thing object" in case["metadata"]["obj"]
+
+
+def test_an_unexpected_error_never_fails_a_passing_suite(eval_repo):
+    """The contract's last line: a snapshot must never break the suite it observes."""
+    (eval_repo / "conftest.py").write_text('''
+import getdrift.pytest_plugin as plugin
+
+def _explode(*args, **kwargs):
+    raise RuntimeError("something nobody predicted")
+
+plugin.create_snapshot = _explode
+''')
+    _init_drift(eval_repo)
+    result = _run_pytest(eval_repo)
+
+    assert result.returncode == 0
+    assert "unexpected RuntimeError" in result.stdout
