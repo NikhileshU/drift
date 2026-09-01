@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from getdrift.commands import fail
+from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.diffing import BUCKET_ORDER, DEFAULT_THRESHOLD, CaseDiff, compare
 from getdrift.gitutil import GitError
 from getdrift.paths import drift_dir, read_config
@@ -81,6 +81,7 @@ def diff(
         drift = drift_dir()
     except GitError as exc:
         fail(exc)
+    warn_if_schemas_stale(drift)
     try:
         before, after = load_snapshot(hash1, drift), load_snapshot(hash2, drift)
     except SnapshotError as exc:
