@@ -1,0 +1,13 @@
+# Drift configuration.
+# Keys are defined here with empty values on purpose — fill in what your repo needs.
+
+# Where the golden-set eval cases live, relative to the repo root.
+golden_set_path: ".drift/golden_set"
+
+# Configuration for the scorer / judge that produced `metric_scores`.
+# e.g. rubric path, judge model, temperature. Free-form: Drift does not read it.
+scorer_config: {}
+
+# Configuration for the model under test.
+# e.g. provider, model id, decoding params. Free-form: Drift does not read it.
+model_config: {}
