@@ -87,3 +87,35 @@ def test_incompatible_major_schema_version_is_rejected(example_results):
     doc["schema_version"] = "2.0.0"
     with pytest.raises(SchemaValidationError):
         validate_results(doc)
+
+
+# --- version compatibility: a newer file must never be silently misread -------
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "0.9.0", "1.0.9"])
+def test_same_or_older_versions_are_accepted(example_results, version):
+    doc = copy.deepcopy(example_results)
+    doc["schema_version"] = version
+    if version.startswith("1."):
+        validate_results(doc)
+    else:
+        with pytest.raises(SchemaValidationError):
+            validate_results(doc)
+
+
+@pytest.mark.parametrize("version", ["1.1.0", "1.9.0", "1.99.0", "2.0.0"])
+def test_a_newer_schema_version_is_rejected_not_ignored(example_results, version):
+    """An older Drift must refuse a newer file rather than ignore fields it cannot see."""
+    doc = copy.deepcopy(example_results)
+    doc["schema_version"] = version
+    with pytest.raises(SchemaValidationError) as exc:
+        validate_results(doc)
+    assert any("schema_version" in problem for problem in exc.value.problems)
+
+
+def test_newer_minor_names_the_remedy(example_results):
+    doc = copy.deepcopy(example_results)
+    doc["schema_version"] = "1.1.0"
+    with pytest.raises(SchemaValidationError) as exc:
+        validate_results(doc)
+    assert any("Upgrade Drift" in problem for problem in exc.value.problems)
