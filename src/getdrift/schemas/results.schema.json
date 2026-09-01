@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getdrift.dev/schema/results.schema.json",
+  "title": "Drift results.json",
+  "description": "One eval run's per-case outcomes. This file is the unit that `drift snapshot` stores immutably against a git commit hash, and the unit `drift diff` compares.",
+  "type": "object",
+  "required": ["schema_version", "cases"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of this results schema. Drift accepts any 1.x file. Bump the major version only for a breaking change to the case entry shape.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "cases": {
+      "type": "array",
+      "description": "One entry per eval case in the run. `case_id` must be unique across this array; Drift enforces that at validation time (JSON Schema cannot express it).",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Free-form run-level metadata. Drift never reads it; adapters may put whatever they like here.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "title": "Eval case result",
+      "required": ["case_id", "metric_scores", "pass", "environment", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "Stable identifier for the eval case. Must be unique within a single results.json, and stable across commits — this is the key `drift diff` matches on. A case_id that changes between runs shows up as a New case plus a silently dropped one.",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "metric_scores": {
+          "type": "object",
+          "description": "Metric name to numeric score. At least one metric is required. Metric names should be stable across runs; a metric present in one snapshot and absent in the other is skipped when computing that case's score delta.",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[A-Za-z0-9_.:-]+$" },
+          "additionalProperties": { "type": "number" }
+        },
+        "pass": {
+          "type": "boolean",
+          "description": "Whether the case passed. Drives the Fixed and Regressed buckets. NOTE for adapter authors: `pass` is a Python keyword, so read it as row[\"pass\"], never row.pass.",
+          "default": false
+        },
+        "environment": {
+          "type": "string",
+          "description": "Where the case was run. `golden_set` is a curated, repeatable eval set; `production_sample` is sampled live traffic.",
+          "enum": ["golden_set", "production_sample"]
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "When the case was evaluated, ISO 8601 with an explicit UTC offset (e.g. 2026-09-01T09:46:50Z). Offset is required — naive local times are not comparable across CI machines.",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Free-form per-case metadata (prompt text, trace id, latency, ...). Drift never reads it. Put anything non-schema here rather than adding top-level keys — case entries reject unknown properties on purpose, so that extending the contract requires a review.",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

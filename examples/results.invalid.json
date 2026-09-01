@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {
+      "case_id": "refund_policy_multi_turn",
+      "metric_scores": { "answer_correctness": 0.91 },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    },
+    {
+      "case_id": "refund_policy_multi_turn",
+      "metric_scores": { "answer_correctness": "high" },
+      "pass": "yes",
+      "environment": "staging",
+      "timestamp": "Sept 1 2026"
+    }
+  ]
+}

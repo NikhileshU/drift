@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {
+      "case_id": "refund_policy_multi_turn",
+      "metric_scores": {
+        "answer_correctness": 0.91,
+        "citation_precision": 0.78,
+        "latency_ms": 1420
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z",
+      "metadata": {
+        "trace_id": "6f1c9a2e4b7d",
+        "turns": 3
+      }
+    },
+    {
+      "case_id": "escalation_tone_angry_customer",
+      "metric_scores": {
+        "answer_correctness": 0.44,
+        "citation_precision": 0.61
+      },
+      "pass": false,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:05.221Z"
+    },
+    {
+      "case_id": "sku_lookup_ambiguous",
+      "metric_scores": {
+        "answer_correctness": 0.7
+      },
+      "pass": true,
+      "environment": "production_sample",
+      "timestamp": "2026-09-01T05:41:07-04:00",
+      "metadata": {
+        "sampled_from": "prod-us-east",
+        "redacted": true
+      }
+    }
+  ],
+  "metadata": {
+    "harness": "internal-eval-runner",
+    "dataset_revision": "golden-set-2026-08"
+  }
+}

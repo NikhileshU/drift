@@ -6,7 +6,7 @@ import typer
 
 from getdrift.gitutil import GitError
 from getdrift.paths import DriftPaths
-from getdrift.resources import config_template
+from getdrift.resources import config_template, packaged_schemas
 
 def _report(path: Path, root: Path, created: bool) -> None:
     rel = path.relative_to(root)
@@ -34,10 +34,30 @@ def init(
     already = paths.initialized
     typer.echo(f"Initializing Drift in {root}")
 
-    for directory in (paths.drift_dir, paths.golden_set_dir, paths.snapshots_dir):
+    for directory in (
+        paths.drift_dir,
+        paths.schema_dir,
+        paths.golden_set_dir,
+        paths.snapshots_dir,
+    ):
         created = not directory.is_dir()
         directory.mkdir(parents=True, exist_ok=True)
         _report(directory, root, created)
+
+    # The schemas are the contract: always refresh them to match the installed
+    # Drift version, since a stale on-disk schema would silently change validation.
+    for filename, contents in packaged_schemas().items():
+        target = paths.schema_dir / filename
+        existed = target.exists()
+        changed = not existed or target.read_text(encoding="utf-8") != contents
+        if changed:
+            target.write_text(contents, encoding="utf-8")
+        _report(target, root, created=not existed)
+        if existed and changed:
+            typer.secho(
+                f"  (updated {target.name} to the schema shipped with this Drift build)",
+                fg=typer.colors.YELLOW,
+            )
 
     if paths.config_file.exists() and not force:
         _report(paths.config_file, root, created=False)

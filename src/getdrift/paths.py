@@ -24,6 +24,10 @@ class DriftPaths:
         return self.drift_dir / "config.yaml"
 
     @property
+    def schema_dir(self) -> Path:
+        return self.drift_dir / "schema"
+
+    @property
     def golden_set_dir(self) -> Path:
         return self.drift_dir / "golden_set"
 
