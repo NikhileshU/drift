@@ -9,6 +9,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from getdrift.commands import fail
 from getdrift.diffing import BUCKET_ORDER, DEFAULT_THRESHOLD, CaseDiff, compare
 from getdrift.gitutil import GitError
 from getdrift.paths import drift_dir
@@ -23,11 +24,6 @@ BUCKET_STYLE = {
 }
 
 
-def _fail(message: object) -> None:
-    typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
-    raise typer.Exit(code=1)
-
-
 def _resolve(snapshots: Path, ref: str) -> Path:
     """Accept a full hash or an unambiguous prefix of one."""
     exact = snapshots / ref
@@ -35,9 +31,9 @@ def _resolve(snapshots: Path, ref: str) -> Path:
         return exact
     matches = sorted(p for p in snapshots.glob(f"{ref}*") if p.is_dir())
     if not matches:
-        _fail(f"no snapshot for {ref!r}. `ls .drift/snapshots` to see what exists.")
+        fail(f"no snapshot for {ref!r}. `ls .drift/snapshots` to see what exists.")
     if len(matches) > 1:
-        _fail(f"{ref!r} matches {len(matches)} snapshots: {', '.join(p.name for p in matches)}")
+        fail(f"{ref!r} matches {len(matches)} snapshots: {', '.join(p.name for p in matches)}")
     return matches[0]
 
 
@@ -46,9 +42,9 @@ def _load(snapshot: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        _fail(f"{path} is missing — that snapshot directory is incomplete.")
+        fail(f"{path} is missing — that snapshot directory is incomplete.")
     except json.JSONDecodeError as exc:
-        _fail(f"{path} is not valid JSON: {exc}")
+        fail(f"{path} is not valid JSON: {exc}")
 
 
 def _threshold(drift: Path, override: Optional[float]) -> float:
@@ -112,14 +108,14 @@ def diff(
     try:
         drift = drift_dir()
     except GitError as exc:
-        _fail(exc)
+        fail(exc)
     snapshots = drift / "snapshots"
     if not snapshots.is_dir():
-        _fail("no .drift/snapshots/ in this repo — run `drift init` first")
+        fail("no .drift/snapshots/ in this repo — run `drift init` first")
 
     before_dir, after_dir = _resolve(snapshots, hash1), _resolve(snapshots, hash2)
     if before_dir == after_dir:
-        _fail(f"both arguments resolve to the same snapshot ({before_dir.name})")
+        fail(f"both arguments resolve to the same snapshot ({before_dir.name})")
 
     resolved_threshold = _threshold(drift, threshold)
     diffs, removed = compare(_load(before_dir), _load(after_dir), resolved_threshold)

@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from getdrift import __version__
+from getdrift.commands import fail
 from getdrift.gitutil import GitError, has_uncommitted_changes, head_hash
 from getdrift.paths import drift_dir
 from getdrift.schema import (
@@ -17,11 +18,6 @@ from getdrift.schema import (
 )
 
 PLACEHOLDER = "unset"
-
-
-def _fail(message: object) -> None:
-    typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
-    raise typer.Exit(code=1)
 
 
 def _fail_validation(exc: SchemaValidationError, schema_name: str) -> None:
@@ -66,17 +62,17 @@ def snapshot(
         commit = head_hash()
         dirty = has_uncommitted_changes()
     except GitError as exc:
-        _fail(exc)
+        fail(exc)
 
     if not drift.is_dir():
-        _fail("no .drift/ directory in this repo — run `drift init` first")
+        fail("no .drift/ directory in this repo — run `drift init` first")
 
     try:
         results = json.loads(results_file.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        _fail(f"{results_file} does not exist")
+        fail(f"{results_file} does not exist")
     except json.JSONDecodeError as exc:
-        _fail(f"{results_file} is not valid JSON: {exc}")
+        fail(f"{results_file} is not valid JSON: {exc}")
 
     try:
         validate_results(results, source=str(results_file), drift_dir=drift)
@@ -87,7 +83,7 @@ def snapshot(
     # no --force — overwriting would make every past diff unreproducible.
     target = drift / "snapshots" / commit
     if target.exists():
-        _fail(
+        fail(
             f"a snapshot for {commit} already exists at "
             f"{target.relative_to(drift.parent)}\n"
             "       Snapshots are immutable — Drift will not overwrite one. Commit your\n"
