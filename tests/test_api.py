@@ -100,3 +100,25 @@ def test_load_tolerates_a_missing_manifest(git_repo):
     created = create_snapshot(DEMO / "baseline.json")
     (created.path / "manifest.json").unlink()
     assert load_snapshot(created.commit_hash).manifest is None
+
+
+def test_unserialisable_metadata_is_refused_without_poisoning_the_commit(
+    git_repo, example_results
+):
+    """`metadata` is free-form, so an in-process caller can hand us any object.
+
+    Schema validation passes it; json.dumps does not. If that failed after mkdir the
+    empty directory would look like a real snapshot to the immutability guard and lock
+    the commit out permanently.
+    """
+    runner.invoke(app, ["init"])
+    doc = json.loads(json.dumps(example_results))
+    doc["cases"][0]["metadata"] = {"obj": object()}
+
+    with pytest.raises(ResultsFileError) as exc:
+        create_snapshot(doc)
+    assert "JSON-native" in str(exc.value)
+    assert list((git_repo / ".drift" / "snapshots").iterdir()) == []
+
+    # and the commit is still snapshottable once the bad value is gone
+    assert create_snapshot(example_results).path.is_dir()

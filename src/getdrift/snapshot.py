@@ -10,6 +10,7 @@ exceptions into an exit code plus a parsed stderr string.
 
 import copy
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -202,9 +203,30 @@ def create_snapshot(
     # half-built snapshot directory that then blocks the retry.
     validate_manifest(manifest, source="generated manifest.json", drift_dir=base)
 
+    # Serialise BEFORE mkdir. `metadata` is free-form, so a value can satisfy schema
+    # validation and still be unserialisable — an in-process caller can hand us any
+    # Python object. Failing after mkdir leaves an empty directory that the
+    # immutability guard then treats as a real snapshot, locking that commit out
+    # permanently, and the guard's own message tells the user not to delete it.
+    try:
+        payload = [
+            (name, json.dumps(doc, indent=2) + "\n")
+            for name, doc in (("results.json", document), ("manifest.json", manifest))
+        ]
+    except (TypeError, ValueError) as exc:
+        raise ResultsFileError(
+            f"results could not be serialised to JSON: {exc}. Every value in a "
+            "`metadata` object must be JSON-native (str, number, bool, null, list, dict)."
+        ) from exc
+
     target.mkdir(parents=True)
-    for name, doc in (("results.json", document), ("manifest.json", manifest)):
-        (target / name).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    try:
+        for name, text in payload:
+            (target / name).write_text(text, encoding="utf-8")
+    except OSError:
+        # Same reasoning: a half-written directory must never outlive a failed write.
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     return Snapshot(target, commit, document, manifest, dirty, warnings)
 
 
