@@ -1,30 +1,24 @@
 """Loading and enforcing the Drift contract schemas.
 
 The schemas are standalone JSON Schema files, never inline dicts. Two copies exist:
-
-* the canonical copy shipped inside the installed package (`getdrift/schemas/`), and
-* the working copy `drift init` writes to `.drift/schema/`, which is the file
-  adapter authors read and reference.
-
-Validation prefers the repo's `.drift/schema/` copy, so what is on disk in the repo
-is genuinely the contract. If it is missing, Drift falls back to the packaged copy
-and says so.
+the canonical one shipped inside the installed package, and the one `drift init`
+writes to `.drift/schema/`. Validation prefers the repo's copy, so the file sitting
+in the repo genuinely is the contract.
 """
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from getdrift.resources import SCHEMAS_DIR
-
+SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
 RESULTS_SCHEMA_FILENAME = "results.schema.json"
 MANIFEST_SCHEMA_FILENAME = "manifest.schema.json"
 
-#: Schema version Drift writes. Files with the same major version are accepted.
-RESULTS_SCHEMA_VERSION = "1.0.0"
-MANIFEST_SCHEMA_VERSION = "1.0.0"
+#: Schema version Drift writes. Files sharing its major version are accepted.
+SCHEMA_VERSION = "1.0.0"
+_MAJOR = SCHEMA_VERSION.split(".")[0]
 
 
 class SchemaValidationError(ValueError):
@@ -36,73 +30,58 @@ class SchemaValidationError(ValueError):
         super().__init__(f"{source} is not valid ({len(problems)} problem(s))")
 
 
-def _schema_path(filename: str, drift_dir: Optional[Path]) -> Tuple[Path, bool]:
-    """Return (path, is_packaged_fallback) for a schema file."""
-    if drift_dir is not None:
-        candidate = drift_dir / "schema" / filename
-        if candidate.is_file():
-            return candidate, False
-    return SCHEMAS_DIR / filename, True
-
-
 def load_schema(filename: str, drift_dir: Optional[Path] = None) -> Dict[str, Any]:
-    path, _ = _schema_path(filename, drift_dir)
+    """Read a schema, preferring the repo's `.drift/schema/` copy over the packaged one."""
+    path = drift_dir / "schema" / filename if drift_dir else None
+    if path is None or not path.is_file():
+        path = SCHEMAS_DIR / filename
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _pointer(err) -> str:
-    if not err.absolute_path:
-        return "<root>"
-    parts = []
-    for part in err.absolute_path:
-        parts.append(f"[{part}]" if isinstance(part, int) else f".{part}")
-    return "".join(parts).lstrip(".")
+def _problems(document: Any, filename: str, drift_dir: Optional[Path]) -> List[str]:
+    validator = Draft202012Validator(
+        load_schema(filename, drift_dir), format_checker=FormatChecker()
+    )
+    problems = [
+        f"{err.json_path}: {err.message}"
+        for err in sorted(validator.iter_errors(document), key=lambda e: list(e.absolute_path))
+    ]
+    version = document.get("schema_version") if isinstance(document, dict) else None
+    if isinstance(version, str) and version.split(".")[0] != _MAJOR:
+        problems.append(
+            f"schema_version: {version!r} is not compatible with this Drift build, "
+            f"which speaks {_MAJOR}.x"
+        )
+    return problems
 
 
-def _validate(document: Any, schema: Dict[str, Any], source: str) -> List[str]:
-    validator = Draft202012Validator(schema, format_checker=FormatChecker())
-    errors = sorted(validator.iter_errors(document), key=lambda e: list(e.absolute_path))
-    return [f"{_pointer(err)}: {err.message}" for err in errors]
-
-
-def _check_major(document: Any, expected: str, problems: List[str]) -> None:
-    if not isinstance(document, dict):
-        return
-    version = document.get("schema_version")
-    if isinstance(version, str) and version.count(".") == 2:
-        if version.split(".")[0] != expected.split(".")[0]:
+def _duplicate_case_ids(document: Any) -> List[str]:
+    """case_id uniqueness is part of the contract; JSON Schema cannot express it."""
+    cases = document.get("cases") if isinstance(document, dict) else None
+    if not isinstance(cases, list):
+        return []
+    seen: Dict[str, int] = {}
+    problems = []
+    for index, case in enumerate(cases):
+        case_id = case.get("case_id") if isinstance(case, dict) else None
+        if not isinstance(case_id, str):
+            continue
+        if case_id in seen:
             problems.append(
-                f"schema_version: {version!r} is not compatible with this Drift build, "
-                f"which speaks {expected.split('.')[0]}.x"
+                f"$.cases[{index}].case_id: duplicate case_id {case_id!r} "
+                f"(first seen at cases[{seen[case_id]}]); "
+                "case_id must be unique within a run"
             )
+        seen.setdefault(case_id, index)
+    return problems
 
 
 def validate_results(
     document: Any, source: str = "results.json", drift_dir: Optional[Path] = None
 ) -> None:
     """Raise SchemaValidationError unless `document` is a valid results.json."""
-    schema = load_schema(RESULTS_SCHEMA_FILENAME, drift_dir)
-    problems = _validate(document, schema, source)
-    _check_major(document, RESULTS_SCHEMA_VERSION, problems)
-
-    # case_id uniqueness is part of the contract but is not expressible in JSON Schema.
-    if isinstance(document, dict) and isinstance(document.get("cases"), list):
-        seen: Dict[str, int] = {}
-        for index, case in enumerate(document["cases"]):
-            if not isinstance(case, dict):
-                continue
-            case_id = case.get("case_id")
-            if not isinstance(case_id, str):
-                continue
-            if case_id in seen:
-                problems.append(
-                    f"cases[{index}].case_id: duplicate case_id {case_id!r} "
-                    f"(first seen at cases[{seen[case_id]}]); "
-                    "case_id must be unique within a run"
-                )
-            else:
-                seen[case_id] = index
-
+    problems = _problems(document, RESULTS_SCHEMA_FILENAME, drift_dir)
+    problems += _duplicate_case_ids(document)
     if problems:
         raise SchemaValidationError(source, problems)
 
@@ -111,8 +90,6 @@ def validate_manifest(
     document: Any, source: str = "manifest.json", drift_dir: Optional[Path] = None
 ) -> None:
     """Raise SchemaValidationError unless `document` is a valid manifest.json."""
-    schema = load_schema(MANIFEST_SCHEMA_FILENAME, drift_dir)
-    problems = _validate(document, schema, source)
-    _check_major(document, MANIFEST_SCHEMA_VERSION, problems)
+    problems = _problems(document, MANIFEST_SCHEMA_FILENAME, drift_dir)
     if problems:
         raise SchemaValidationError(source, problems)

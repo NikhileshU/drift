@@ -5,15 +5,16 @@ from pathlib import Path
 import typer
 
 from getdrift.gitutil import GitError
-from getdrift.paths import DriftPaths
-from getdrift.resources import config_template, packaged_schemas
+from getdrift.paths import drift_dir
+from getdrift.schema import SCHEMAS_DIR
+
+CONFIG_TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "config.yaml"
+
 
 def _report(path: Path, root: Path, created: bool) -> None:
-    rel = path.relative_to(root)
-    if created:
-        typer.secho(f"  created  {rel}", fg=typer.colors.GREEN)
-    else:
-        typer.secho(f"  exists   {rel}", fg=typer.colors.YELLOW)
+    colour = typer.colors.GREEN if created else typer.colors.YELLOW
+    label = "created" if created else "exists "
+    typer.secho(f"  {label}  {path.relative_to(root)}", fg=colour)
 
 
 def init(
@@ -25,56 +26,41 @@ def init(
 ) -> None:
     """Create the .drift/ directory structure in the current repo."""
     try:
-        paths = DriftPaths.discover()
+        drift = drift_dir()
     except GitError as exc:
         typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    root = paths.repo_root
-    already = paths.initialized
+    root = drift.parent
+    already = drift.is_dir()
     typer.echo(f"Initializing Drift in {root}")
 
-    for directory in (
-        paths.drift_dir,
-        paths.schema_dir,
-        paths.golden_set_dir,
-        paths.snapshots_dir,
-    ):
+    for directory in (drift, drift / "schema", drift / "golden_set", drift / "snapshots"):
         created = not directory.is_dir()
         directory.mkdir(parents=True, exist_ok=True)
         _report(directory, root, created)
 
-    # The schemas are the contract: always refresh them to match the installed
-    # Drift version, since a stale on-disk schema would silently change validation.
-    for filename, contents in packaged_schemas().items():
-        target = paths.schema_dir / filename
+    # The schemas are the contract: always refresh them to match the installed Drift
+    # version, since a stale on-disk schema would silently change what validates.
+    for source in sorted(SCHEMAS_DIR.glob("*.schema.json")):
+        target = drift / "schema" / source.name
         existed = target.exists()
-        changed = not existed or target.read_text(encoding="utf-8") != contents
-        if changed:
-            target.write_text(contents, encoding="utf-8")
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         _report(target, root, created=not existed)
-        if existed and changed:
-            typer.secho(
-                f"  (updated {target.name} to the schema shipped with this Drift build)",
-                fg=typer.colors.YELLOW,
-            )
 
-    if paths.config_file.exists() and not force:
-        _report(paths.config_file, root, created=False)
+    config = drift / "config.yaml"
+    if config.exists() and not force:
+        _report(config, root, created=False)
     else:
-        overwritten = paths.config_file.exists()
-        paths.config_file.write_text(config_template(), encoding="utf-8")
-        _report(paths.config_file, root, created=not overwritten)
+        overwritten = config.exists()
+        config.write_text(CONFIG_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
+        _report(config, root, created=not overwritten)
         if overwritten:
-            typer.secho(
-                "  (config.yaml reset to the stub template by --force)",
-                fg=typer.colors.YELLOW,
-            )
+            typer.secho("  (config.yaml reset by --force)", fg=typer.colors.YELLOW)
 
     if already:
         typer.secho(
-            "\n.drift/ already existed — missing pieces were filled in, "
-            "nothing else was touched.",
+            "\n.drift/ already existed — missing pieces were filled in.",
             fg=typer.colors.YELLOW,
         )
     else:
