@@ -68,6 +68,11 @@ the span's end time, converted to UTC with millisecond precision
 (`2026-09-01T09:41:02.123Z`). Span timestamps are ns-since-epoch UTC integers, so this
 conversion cannot produce the naive local time the schema rejects.
 
+If you do set it, it is checked **as the span is converted**, and a value with no
+explicit offset raises `SpanConventionError` naming the span. A bad `drift.timestamp` is
+almost always one instrumentation bug repeated across every span, so failing once with
+the span's name beats emitting the schema's regex once per case.
+
 ### `drift.metadata.<key>`
 Free-form per-case metadata: prompt hash, trace id, latency, retry count. It lands in
 the schema's `metadata` escape hatch and Drift never reads it. This is where

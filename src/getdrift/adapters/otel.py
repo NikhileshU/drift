@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from getdrift.adapters import is_offset_aware
 from getdrift.schema import SCHEMA_VERSION, validate_results
 
 PREFIX = "drift."
@@ -92,6 +93,14 @@ def case_from_span(span: Any) -> Optional[Dict[str, Any]]:
             f"one of {ENVIRONMENTS}."
         )
 
+    override = attributes.get(TIMESTAMP)
+    if override is not None and not is_offset_aware(override):
+        raise SpanConventionError(
+            f"span {name!r} (case_id={case_id!r}): {TIMESTAMP}={override!r} has no "
+            "explicit UTC offset (e.g. 2026-09-01T09:41:02Z). Omit the attribute to "
+            "use the span's own end time, which is always offset-aware."
+        )
+
     metadata = {
         key[len(METADATA_PREFIX):]: value
         for key, value in attributes.items()
@@ -102,7 +111,7 @@ def case_from_span(span: Any) -> Optional[Dict[str, Any]]:
         "metric_scores": scores,
         "pass": bool(_passed(attributes, span)),
         "environment": environment,
-        "timestamp": attributes.get(TIMESTAMP) or _iso(getattr(span, "end_time", None)),
+        "timestamp": override or _iso(getattr(span, "end_time", None)),
         "metadata": metadata or _trace_metadata(span),
     }
 

@@ -154,3 +154,38 @@ def test_multiple_providers_are_recorded_in_config_order_not_completion_order():
 
     document["results"]["results"].reverse()
     assert provenance(document)["model_version"] == "echo,upper"
+
+
+def test_a_user_metric_named_score_is_never_overwritten(promptfoo_output):
+    """Snapshots are immutable, so clobbering a user's metric would be wrong forever."""
+    row = promptfoo_output["results"]["results"][0]
+    row["namedScores"], row["score"] = {"score": 0.99}, 0.10
+
+    scores = convert(promptfoo_output)["cases"][0]["metric_scores"]
+    assert scores["score"] == 0.99, "the user's own metric keeps its name"
+    assert scores["promptfoo_score"] == 0.10, "promptfoo's overall is kept, not dropped"
+
+
+def test_a_missing_overall_score_is_not_invented(promptfoo_output):
+    """0.0 is a real value: injecting one drags the case's delta down for free."""
+    row = promptfoo_output["results"]["results"][0]
+    row["namedScores"], row["score"] = {"acc": 0.8}, None
+
+    assert convert(promptfoo_output)["cases"][0]["metric_scores"] == {"acc": 0.8}
+
+
+def test_no_scores_at_all_raises_instead_of_fabricating_one(promptfoo_output):
+    for row in promptfoo_output["results"]["results"]:
+        row["namedScores"], row["score"] = {}, None
+    with pytest.raises(PromptfooFormatError, match="no numeric scores"):
+        convert(promptfoo_output)
+
+
+def test_a_naive_run_timestamp_warns_once_and_falls_back(promptfoo_output, recwarn):
+    """One run-level field, so it must not become one schema error per case."""
+    promptfoo_output["results"]["timestamp"] = "2026-09-01 10:05:45"
+
+    results = convert(promptfoo_output)  # would raise on validation if it leaked through
+    assert len(recwarn.list) == 1
+    assert "no explicit UTC offset" in str(recwarn.list[0].message)
+    assert all(case["timestamp"].endswith("Z") for case in results["cases"])

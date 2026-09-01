@@ -93,3 +93,25 @@ def test_span_end_time_becomes_an_offset_carrying_timestamp():
     case = case_from_span(_Span(**{"drift.case_id": "c", "drift.score.acc": 0.9}))
     assert case["timestamp"] == "2026-09-01T09:41:02.123Z"
     validate_results({"schema_version": "1.0.0", "cases": [case]})
+
+
+def test_naive_drift_timestamp_names_the_span_instead_of_dumping_the_schema_regex():
+    """A whole instrumentation's worth of bad timestamps should fail once, clearly."""
+    from getdrift.adapters.otel import case_from_span
+
+    span = _Span(**{
+        "drift.case_id": "c", "drift.score.acc": 0.9,
+        "drift.timestamp": "2026-09-01 09:41:02",
+    })
+    with pytest.raises(SpanConventionError, match="explicit UTC offset"):
+        case_from_span(span)
+
+
+def test_an_offset_aware_drift_timestamp_still_overrides_the_span_end_time():
+    from getdrift.adapters.otel import case_from_span
+
+    span = _Span(**{
+        "drift.case_id": "c", "drift.score.acc": 0.9,
+        "drift.timestamp": "2026-09-01T05:41:07-04:00",
+    })
+    assert case_from_span(span)["timestamp"] == "2026-09-01T05:41:07-04:00"

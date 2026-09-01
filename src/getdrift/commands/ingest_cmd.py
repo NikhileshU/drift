@@ -15,7 +15,21 @@ from getdrift.adapters.promptfoo import (
     PromptfooFormatError,
     convert_file,
 )
+from getdrift.gitutil import GitError
+from getdrift.paths import drift_dir
 from getdrift.schema import SchemaValidationError
+
+
+def _repo_schema_dir():
+    """The repo's own .drift/, so `ingest` validates against what `snapshot` will use.
+
+    None outside a repo or before `drift init` — ingest is useful in both, and the
+    packaged schema is the right fallback there."""
+    try:
+        base = drift_dir()
+    except GitError:
+        return None
+    return base if base.is_dir() else None
 
 ingest = typer.Typer(
     name="ingest",
@@ -40,7 +54,9 @@ def promptfoo_cmd(
 ) -> None:
     """Convert promptfoo output into a schema-valid results.json."""
     try:
-        results = convert_file(input_file, environment=environment)
+        results = convert_file(
+            input_file, environment=environment, drift_dir=_repo_schema_dir()
+        )
     except PromptfooFormatError as exc:
         typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)

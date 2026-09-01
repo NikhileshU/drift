@@ -7,10 +7,12 @@ Verified against promptfoo 0.122.2 (`results.version: 3`).
 import hashlib
 import json
 import re
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from getdrift.adapters import is_offset_aware
 from getdrift.schema import SCHEMA_VERSION, validate_results
 
 DEFAULT_ENVIRONMENT = "golden_set"
@@ -36,11 +38,28 @@ def _rows(document: Any) -> List[Dict[str, Any]]:
     return [row for row in node if isinstance(row, dict)]
 
 
-def _run_timestamp(document: Any) -> str:
-    stamp = document.get("results", {}).get("timestamp") if isinstance(document, dict) else None
-    if isinstance(stamp, str) and stamp:
-        return stamp
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _run_timestamp(document: Any) -> str:
+    """promptfoo's run timestamp, checked ONCE before it is copied onto every case.
+
+    Every case in a run shares this one field, so letting a naive value through would
+    surface as N identical schema errors with nothing naming the field that caused them.
+    It is informational — Drift diffs on scores, not times — so a bad one warns and
+    falls back rather than blocking the whole ingestion.
+    """
+    stamp = document.get("results", {}).get("timestamp") if isinstance(document, dict) else None
+    if is_offset_aware(stamp):
+        return stamp
+    if stamp:
+        warnings.warn(
+            f"promptfoo results.timestamp {stamp!r} has no explicit UTC offset, which "
+            "the Drift schema requires; using the ingestion time instead.",
+            stacklevel=2,
+        )
+    return _now()
 
 
 def _test_name(row: Dict[str, Any]) -> str:
@@ -90,7 +109,16 @@ def _scores(row: Dict[str, Any], case_id: str) -> Dict[str, float]:
             "Rename the `metric:` in your promptfooconfig."
         )
     overall = row.get("score")
-    scores["score"] = overall if isinstance(overall, (int, float)) and not isinstance(overall, bool) else 0.0
+    if isinstance(overall, (int, float)) and not isinstance(overall, bool):
+        # `score` is a plausible name for a user's own `metric:`, and snapshots are
+        # immutable — overwriting theirs would be wrong forever. Keep both instead.
+        scores["promptfoo_score" if "score" in scores else "score"] = overall
+    elif not scores:
+        raise PromptfooFormatError(
+            f"case {case_id!r}: promptfoo reported no numeric scores. Add a `metric:` "
+            "to an assertion in your promptfooconfig, or check that the run completed — "
+            "Drift will not invent a score to satisfy the schema."
+        )
     return scores
 
 
@@ -224,8 +252,14 @@ def convert(
     document: Any,
     environment: str = DEFAULT_ENVIRONMENT,
     source: Optional[str] = None,
+    drift_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Convert parsed promptfoo output into a validated results.json document."""
+    """Convert parsed promptfoo output into a validated results.json document.
+
+    `drift_dir` validates against a repo's own `.drift/schema/` copy, which is what
+    `drift snapshot` will use; without it the packaged schema is used, so the adapter
+    still works as a library outside a repo.
+    """
     rows = _rows(document)
     if not rows:
         raise PromptfooFormatError("the promptfoo output contains no result rows.")
@@ -265,12 +299,18 @@ def convert(
         "cases": cases,
         "metadata": {k: v for k, v in metadata.items() if v is not None},
     }
-    validate_results(results, source=f"results.json (from promptfoo {source or 'output'})")
+    validate_results(
+        results,
+        source=f"results.json (from promptfoo {source or 'output'})",
+        drift_dir=drift_dir,
+    )
     return results
 
 
 def convert_file(
-    path: Path, environment: str = DEFAULT_ENVIRONMENT
+    path: Path,
+    environment: str = DEFAULT_ENVIRONMENT,
+    drift_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Read `promptfoo eval -o <path>` output and convert it."""
     path = Path(path)
@@ -278,4 +318,4 @@ def convert_file(
         document = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise PromptfooFormatError(f"{path} is not valid JSON: {exc}") from exc
-    return convert(document, environment=environment, source=path.name)
+    return convert(document, environment=environment, source=path.name, drift_dir=drift_dir)

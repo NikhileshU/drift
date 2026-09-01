@@ -113,10 +113,21 @@ assert:
     metric: answer_correctness   # -> metric_scores.answer_correctness
 ```
 
-The row's overall weighted `score` is **always** added as `score`. That is deliberate:
-`namedScores` is `{}` for a config with no `metric:` labels, and the schema requires at
-least one metric, so `score` guarantees every run is ingestible with no config change
-and gives one metric that is comparable across every promptfoo repo.
+The row's overall weighted `score` is added as `score`, so a config with no `metric:`
+labels at all is still ingestible — `namedScores` is `{}` there, and the schema requires
+at least one metric.
+
+Two things it will **not** do:
+
+* **It never overwrites a metric you named `score` yourself.** `metric: score` is a
+  plausible thing to write, and snapshots are immutable, so clobbering your value would
+  be wrong forever. If the name is taken, promptfoo's overall goes to `promptfoo_score`
+  and both survive.
+* **It never invents a score.** If promptfoo reports no overall `score`, nothing is
+  added — injecting `0.0` would be a metric the harness never produced, at the worst
+  possible value, dragging the case's delta down for free. When there is genuinely
+  nothing numeric to record, ingestion fails with an error naming the case rather than
+  fabricating a number to satisfy the schema.
 
 Metric names must match the schema's `^[A-Za-z0-9_.:-]+$`. A promptfoo `metric:` with a
 space in it is a **loud error**, not a silently mangled name — rename it in your config.
@@ -141,8 +152,20 @@ sampled traffic.
 ### `timestamp`
 
 `results.timestamp` is run-level ISO 8601 with a `Z` offset, and every case in the run
-gets it. promptfoo records no per-case time. It already satisfies the schema's
-explicit-offset rule; a run with no timestamp at all falls back to ingestion time.
+gets it. promptfoo records no per-case time.
+
+It is **checked once, before being copied onto every case.** One bad run-level field
+would otherwise surface as one identical schema error per case — 500 regex dumps on a
+500-case run, none of them naming the single field responsible. A timestamp without an
+explicit offset warns and falls back to the ingestion time rather than blocking the
+whole run, because the field is informational: Drift diffs on scores, not times.
+
+### Which schema it validates against
+
+`drift ingest promptfoo` validates against the repo's own `.drift/schema/` copy when
+there is one — the same file `drift snapshot` will use — so ingest cannot pass something
+snapshot then rejects. Outside a repo, or before `drift init`, it falls back to the
+schema packaged with Drift, since the adapter is useful as a library in both places.
 
 ## Snapshot provenance — the three `drift snapshot` flags
 
