@@ -24,10 +24,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "opentelemetry-sdk>=1.20"]
+# Only needed to register DriftSpanCollector as a live span processor; the span ->
+# results.json conversion itself has no OTel dependency.
+otel = ["opentelemetry-sdk>=1.20"]
 
 [project.scripts]
 drift = "getdrift.cli:main"
+
+# Installing getdrift is the whole install: pytest discovers the plugin through this
+# entry point, so an eval suite needs no conftest edit and no import.
+[project.entry-points.pytest11]
+drift = "getdrift.pytest_plugin"
 
 [project.urls]
 Homepage = "https://github.com/getdrift/drift"

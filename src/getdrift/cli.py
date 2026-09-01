@@ -4,6 +4,7 @@ import typer
 
 from getdrift import __version__
 from getdrift.commands.diff_cmd import diff
+from getdrift.commands.ingest_cmd import ingest
 from getdrift.commands.init_cmd import init
 from getdrift.commands.snapshot_cmd import snapshot
 
@@ -33,6 +34,7 @@ def _root(
 app.command("init")(init)
 app.command("snapshot")(snapshot)
 app.command("diff")(diff)
+app.add_typer(ingest)
 
 
 def main() -> None:

@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {
+      "case_id": "refund_policy_multi_turn",
+      "metric_scores": {
+        "answer_correctness": 1,
+        "verbosity": 1,
+        "score": 1
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T10:05:45.368Z",
+      "metadata": {
+        "provider": "echo",
+        "prompt_label": "{{answer}}",
+        "latency_ms": 2,
+        "cost": 0,
+        "promptfoo_result_id": "86adbd22-2ca5-4499-9cba-a1d69fd0ae50",
+        "vars": {
+          "answer": "Our refund window is 30 days from delivery."
+        },
+        "reason": "All assertions passed"
+      }
+    },
+    {
+      "case_id": "escalation_tone_angry_customer",
+      "metric_scores": {
+        "answer_correctness": 0,
+        "verbosity": 0.2,
+        "score": 0.1
+      },
+      "pass": false,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T10:05:45.368Z",
+      "metadata": {
+        "provider": "echo",
+        "prompt_label": "{{answer}}",
+        "latency_ms": 1,
+        "cost": 0,
+        "promptfoo_result_id": "50f65c90-792a-460c-9a7a-cc63ba2a2b5a",
+        "vars": {
+          "answer": "Calm down."
+        },
+        "reason": "Expected output to contain \"I understand\""
+      }
+    }
+  ],
+  "metadata": {
+    "harness": "promptfoo",
+    "provenance": {
+      "model_version": "echo",
+      "prompt_version": "557aa7663dd9",
+      "judge_version": "promptfoo-asserts:sha256:c477103ab999"
+    },
+    "eval_id": "eval-ie8-2026-09-01T10:05:45",
+    "description": "Drift sample eval (offline, echo provider)",
+    "stats": {
+      "successes": 1,
+      "failures": 1,
+      "errors": 0,
+      "tokenUsage": {
+        "prompt": 0,
+        "completion": 0,
+        "cached": 0,
+        "total": 0,
+        "numRequests": 2,
+        "completionDetails": {
+          "reasoning": 0,
+          "acceptedPrediction": 0,
+          "rejectedPrediction": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0
+        },
+        "assertions": {
+          "total": 0,
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "numRequests": 0,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          }
+        }
+      },
+      "durationMs": 16,
+      "evaluationDurationMs": 16
+    },
+    "source": "out.json"
+  }
+}
