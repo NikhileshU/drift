@@ -11,3 +11,7 @@ scorer_config: {}
 # Configuration for the model under test.
 # e.g. provider, model id, decoding params. Free-form: Drift does not read it.
 model_config: {}
+
+# Score delta that counts as Improved / Degraded in `drift diff`.
+# Uncomment to override the built-in default of 0.05; --threshold overrides both.
+# diff_threshold: 0.05
