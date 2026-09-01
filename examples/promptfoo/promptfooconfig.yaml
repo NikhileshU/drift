@@ -1,0 +1,26 @@
+description: Drift sample eval (offline, echo provider)
+providers:
+  - id: echo
+prompts:
+  - "{{answer}}"
+tests:
+  - description: refund_policy_multi_turn
+    vars:
+      answer: "Our refund window is 30 days from delivery."
+    assert:
+      - type: contains
+        value: "30 days"
+        metric: answer_correctness
+      - type: javascript
+        value: "output.length > 20 ? 1 : 0.2"
+        metric: verbosity
+  - description: escalation_tone_angry_customer
+    vars:
+      answer: "Calm down."
+    assert:
+      - type: contains
+        value: "I understand"
+        metric: answer_correctness
+      - type: javascript
+        value: "output.length > 20 ? 1 : 0.2"
+        metric: verbosity
