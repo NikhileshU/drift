@@ -24,9 +24,10 @@ _MAJOR = SCHEMA_VERSION.split(".")[0]
 class SchemaValidationError(ValueError):
     """Raised when a results.json / manifest.json does not satisfy the contract."""
 
-    def __init__(self, source: str, problems: List[str]) -> None:
+    def __init__(self, source: str, problems: List[str], schema: str = "") -> None:
         self.source = source
         self.problems = problems
+        self.schema = schema  # filename of the schema that rejected it
         super().__init__(f"{source} is not valid ({len(problems)} problem(s))")
 
 
@@ -83,7 +84,7 @@ def validate_results(
     problems = _problems(document, RESULTS_SCHEMA_FILENAME, drift_dir)
     problems += _duplicate_case_ids(document)
     if problems:
-        raise SchemaValidationError(source, problems)
+        raise SchemaValidationError(source, problems, RESULTS_SCHEMA_FILENAME)
 
 
 def validate_manifest(
@@ -92,4 +93,4 @@ def validate_manifest(
     """Raise SchemaValidationError unless `document` is a valid manifest.json."""
     problems = _problems(document, MANIFEST_SCHEMA_FILENAME, drift_dir)
     if problems:
-        raise SchemaValidationError(source, problems)
+        raise SchemaValidationError(source, problems, MANIFEST_SCHEMA_FILENAME)
