@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {
+      "case_id": "refund_policy_multi_turn",
+      "metric_scores": {
+        "answer_correctness": 0.42,
+        "citation_precision": 0.42
+      },
+      "pass": false,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    },
+    {
+      "case_id": "escalation_tone_angry",
+      "metric_scores": {
+        "answer_correctness": 0.88,
+        "citation_precision": 0.88
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    },
+    {
+      "case_id": "sku_lookup_ambiguous",
+      "metric_scores": {
+        "answer_correctness": 0.61,
+        "citation_precision": 0.61
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    },
+    {
+      "case_id": "multi_hop_inventory_question",
+      "metric_scores": {
+        "answer_correctness": 0.9,
+        "citation_precision": 0.9
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    },
+    {
+      "case_id": "greeting_smoke_test",
+      "metric_scores": {
+        "answer_correctness": 0.95,
+        "citation_precision": 0.95
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    },
+    {
+      "case_id": "legacy_fax_number_lookup",
+      "metric_scores": {
+        "answer_correctness": 0.7,
+        "citation_precision": 0.7
+      },
+      "pass": true,
+      "environment": "golden_set",
+      "timestamp": "2026-09-01T09:41:02Z"
+    }
+  ]
+}
