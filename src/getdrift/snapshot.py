@@ -10,6 +10,7 @@ exceptions into an exit code plus a parsed stderr string.
 
 import copy
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,10 @@ class SnapshotNotFoundError(SnapshotError):
     """No snapshot matches the given hash, or a prefix matches more than one."""
 
 
+class MissingJudgeVersionError(SnapshotError):
+    """`require_judge_version` is on in config.yaml and no real judge version was given."""
+
+
 class SnapshotExistsError(SnapshotError):
     """A snapshot for this commit already exists. Snapshots are never overwritten."""
 
@@ -72,6 +77,18 @@ def _now() -> str:
     return (
         datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     )
+
+
+def _judge_version_required(drift: Path) -> bool:
+    """Whether `.drift/config.yaml` turns on the opt-in judge_version requirement.
+
+    Quoted spellings count too: a safety flag that silently does nothing because the
+    value was written as a string is worse than no flag at all.
+    """
+    value = read_config(drift).get("require_judge_version", False)
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().lower() in {"true", "yes", "on", "1"}
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -188,6 +205,18 @@ def create_snapshot(
     if target.exists():
         raise SnapshotExistsError(commit, target, target.relative_to(base.parent))
 
+    # Opt-in, off by default. Enforced here rather than in the Typer wrapper because
+    # the pytest plugin and the variance work both call this function directly — a
+    # guarantee that only holds for interactive users is not a guarantee. A snapshot
+    # can never be backfilled, so a missing judge version is permanent, not cosmetic.
+    if judge_version == PLACEHOLDER and _judge_version_required(base):
+        raise MissingJudgeVersionError(
+            f"judge_version was left at the {PLACEHOLDER!r} placeholder, and "
+            "require_judge_version is on in .drift/config.yaml. Pass a real rubric or "
+            "judge version so `drift diff` can tell whether two snapshots are "
+            "comparable — a snapshot's provenance cannot be filled in later."
+        )
+
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "commit_hash": commit,
@@ -202,9 +231,30 @@ def create_snapshot(
     # half-built snapshot directory that then blocks the retry.
     validate_manifest(manifest, source="generated manifest.json", drift_dir=base)
 
+    # Serialise BEFORE mkdir. `metadata` is free-form, so a value can satisfy schema
+    # validation and still be unserialisable — an in-process caller can hand us any
+    # Python object. Failing after mkdir leaves an empty directory that the
+    # immutability guard then treats as a real snapshot, locking that commit out
+    # permanently, and the guard's own message tells the user not to delete it.
+    try:
+        payload = [
+            (name, json.dumps(doc, indent=2) + "\n")
+            for name, doc in (("results.json", document), ("manifest.json", manifest))
+        ]
+    except (TypeError, ValueError) as exc:
+        raise ResultsFileError(
+            f"results could not be serialised to JSON: {exc}. Every value in a "
+            "`metadata` object must be JSON-native (str, number, bool, null, list, dict)."
+        ) from exc
+
     target.mkdir(parents=True)
-    for name, doc in (("results.json", document), ("manifest.json", manifest)):
-        (target / name).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    try:
+        for name, text in payload:
+            (target / name).write_text(text, encoding="utf-8")
+    except OSError:
+        # Same reasoning: a half-written directory must never outlive a failed write.
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     return Snapshot(target, commit, document, manifest, dirty, warnings)
 
 
