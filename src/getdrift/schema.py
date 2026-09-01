@@ -21,6 +21,13 @@ MANIFEST_SCHEMA_FILENAME = "manifest.schema.json"
 SCHEMA_VERSION = "1.0.0"
 _MAJOR, _MINOR = (int(part) for part in SCHEMA_VERSION.split(".")[:2])
 
+#: What `drift snapshot` writes for a provenance field left unflagged. It lives here
+#: rather than beside the writer because it is a contract value with two readers:
+#: `drift diff` has to recognise it too, since two snapshots both carrying it were
+#: graded by unknown — possibly different — judges, and treating that as equal is
+#: exactly the false verdict Drift exists to prevent.
+PLACEHOLDER = "unset"
+
 
 class SchemaValidationError(ValueError):
     """Raised when a results.json / manifest.json does not satisfy the contract."""

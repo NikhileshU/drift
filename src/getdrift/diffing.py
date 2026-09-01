@@ -7,10 +7,83 @@ thresholds — without going through the CLI.
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from getdrift.schema import PLACEHOLDER
+
 DEFAULT_THRESHOLD = 0.05
+
+#: Whether two snapshots were graded by the same judge, and so whether a verdict
+#: about the difference between their scores means anything.
+#:
+#: Three states, not two. EQUAL and MISMATCH are the easy ones. UNKNOWN exists
+#: because `drift snapshot` writes the literal placeholder when `--judge-version`
+#: is omitted, so two unflagged snapshots would otherwise compare EQUAL — passing
+#: the comparability check on precisely the case it exists to catch.
+#:
+#: UNKNOWN is deliberately NOT treated as MISMATCH. A mismatch is positive evidence
+#: that the grader changed and earns suppression; an unrecorded judge version is an
+#: absence of evidence. Suppressing it would blank the diff for every team that has
+#: not adopted the flag, on every run — and a warning that always fires is one
+#: nobody reads by the time a real rubric change trips it.
+EQUAL, MISMATCH, UNKNOWN = "equal", "mismatch", "unknown"
 
 #: Display order. Regressed leads because it is the one that stops a release.
 BUCKET_ORDER = ["Regressed", "Degraded", "Fixed", "Improved", "New", "Unchanged"]
+
+
+@dataclass
+class Comparability:
+    """Whether two snapshots' scores can be compared, and how to say so."""
+
+    state: str
+    before: Optional[str]
+    after: Optional[str]
+    detail: str
+
+    @property
+    def suppresses_verdicts(self) -> bool:
+        """Only a known judge change invalidates the verdicts. See EQUAL/MISMATCH/UNKNOWN."""
+        return self.state == MISMATCH
+
+
+def _recorded_judge(manifest: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The snapshot's judge version, or None if it does not really have one.
+
+    None covers all three ways a snapshot can fail to identify its grader: no
+    readable manifest at all, no `judge_version` in it, or the placeholder that
+    `drift snapshot` writes when the flag is omitted.
+    """
+    value = manifest.get("judge_version") if manifest else None
+    return value if isinstance(value, str) and value != PLACEHOLDER else None
+
+
+def judge_comparability(
+    before: Optional[Dict[str, Any]], after: Optional[Dict[str, Any]]
+) -> Comparability:
+    """Classify two manifests as EQUAL, MISMATCH or UNKNOWN on `judge_version`."""
+    old, new = _recorded_judge(before), _recorded_judge(after)
+    if old is not None and new is not None:
+        if old == new:
+            return Comparability(EQUAL, old, new, "")
+        return Comparability(
+            MISMATCH, old, new, f"judge version changed from {old} to {new}"
+        )
+    if old is None and new is None:
+        return Comparability(
+            UNKNOWN, old, new,
+            "neither snapshot records a judge version, so Drift cannot tell whether "
+            "the grader changed between them",
+        )
+    # One side only. Worth its own sentence rather than folding into the above: a
+    # team adopting --judge-version partway through is the common real-world path,
+    # and it tends to happen *because* someone touched the rubric.
+    missing, other, known = ("baseline", "candidate", new) if old is None else (
+        "candidate", "baseline", old
+    )
+    return Comparability(
+        UNKNOWN, old, new,
+        f"the {missing} snapshot records no judge version; the {other} reports "
+        f"{known} — Drift cannot tell whether the grader changed between them",
+    )
 
 
 @dataclass

@@ -8,7 +8,15 @@ from rich.console import Console
 from rich.table import Table
 
 from getdrift.commands import fail, warn_if_schemas_stale
-from getdrift.diffing import BUCKET_ORDER, DEFAULT_THRESHOLD, CaseDiff, compare
+from getdrift.diffing import (
+    BUCKET_ORDER,
+    DEFAULT_THRESHOLD,
+    UNKNOWN,
+    CaseDiff,
+    Comparability,
+    compare,
+    judge_comparability,
+)
 from getdrift.gitutil import GitError
 from getdrift.paths import drift_dir, read_config
 from getdrift.snapshot import Snapshot, SnapshotError, load_snapshot
@@ -21,6 +29,11 @@ BUCKET_STYLE = {
     "New": "cyan",
     "Unchanged": "dim",
 }
+
+#: Provenance shown in the diff header. Only `judge_version` gates anything; the other
+#: two are there because "what else moved?" is the first question a human asks when a
+#: diff comes back flagged as uncomparable.
+PROVENANCE = ("judge_version", "model_version", "prompt_version")
 
 
 def _threshold(drift: Path, override: Optional[float]) -> float:
@@ -66,6 +79,78 @@ def _render(console: Console, bucket: str, cases: List[CaseDiff]) -> None:
     console.print()
 
 
+def _provenance(console: Console, before: Snapshot, after: Snapshot) -> None:
+    for field in PROVENANCE:
+        old = (before.manifest or {}).get(field) or "—"
+        new = (after.manifest or {}).get(field) or "—"
+        line = f"{field:<15}{old} → {new}"
+        console.print(f"[yellow]{line}[/yellow]" if old != new else f"[dim]{line}[/dim]")
+
+
+def _flat(console: Console, cases: List[CaseDiff]) -> None:
+    """Every case's raw numbers with no bucket column — facts without a verdict."""
+    table = Table(
+        title=f"Scores only, no verdict ({len(cases)})",
+        title_style="bold yellow",
+        title_justify="left",
+        header_style="bold",
+        border_style="yellow",
+    )
+    for column in ("case_id", "pass", "before", "after", "delta"):
+        table.add_column(column, overflow="fold", justify="right" if column != "case_id" else "left")
+    for case in sorted(cases, key=lambda c: c.case_id):
+        before = "—" if case.pass_before is None else ("pass" if case.pass_before else "FAIL")
+        table.add_row(
+            case.case_id,
+            f"{before} → {'pass' if case.pass_after else 'FAIL'}",
+            _cell(case.score_before),
+            _cell(case.score_after),
+            "—" if case.delta is None else f"{case.delta:+.3f}",
+        )
+    console.print(table)
+    console.print()
+
+
+def _buckets(console: Console, diffs: List[CaseDiff]) -> None:
+    counts = {bucket: [c for c in diffs if c.bucket == bucket] for bucket in BUCKET_ORDER}
+    for bucket in BUCKET_ORDER:
+        if counts[bucket]:
+            _render(console, bucket, counts[bucket])
+    console.print(
+        "  ".join(
+            f"[{BUCKET_STYLE[b]}]{b} {len(counts[b])}[/{BUCKET_STYLE[b]}]"
+            for b in BUCKET_ORDER
+        )
+    )
+
+
+def _uncomparable(
+    console: Console, comparability: Comparability, diffs: List[CaseDiff]
+) -> None:
+    """Report the numbers and refuse to draw a conclusion from them.
+
+    Every score-derived bucket is withheld, Unchanged included: two rubrics landing on
+    the same score is a coincidence, not a finding, so "unchanged" is as unsupportable a
+    claim here as "regressed". New survives, because whether a case exists in a snapshot
+    does not depend on who graded it.
+    """
+    console.print(f"[bold red]Not directly comparable — {comparability.detail}.[/bold red]")
+    console.print(
+        "[red]Fixed / Regressed / Improved / Degraded / Unchanged are suppressed: a "
+        "verdict on these deltas would be about the rubric, not the model.[/red]\n"
+    )
+    fresh = [c for c in diffs if c.bucket == "New"]
+    judged = [c for c in diffs if c.bucket != "New"]
+    if judged:
+        _flat(console, judged)
+    if fresh:
+        _render(console, "New", fresh)
+    console.print(
+        f"[bold red]Verdicts suppressed {len(judged)}[/bold red]  "
+        f"[{BUCKET_STYLE['New']}]New {len(fresh)}[/{BUCKET_STYLE['New']}]"
+    )
+
+
 def diff(
     hash1: str = typer.Argument(..., help="Baseline snapshot commit hash (or a prefix)."),
     hash2: str = typer.Argument(..., help="Candidate snapshot commit hash (or a prefix)."),
@@ -92,20 +177,27 @@ def diff(
     resolved_threshold = _threshold(drift, threshold)
     diffs, removed = compare(before.results, after.results, resolved_threshold)
 
+    comparability = judge_comparability(before.manifest, after.manifest)
+
     console = Console(highlight=False)
     console.print(
         f"\n[bold]{before.path.name[:12]}[/bold] → [bold]{after.path.name[:12]}[/bold]  "
         f"[dim]threshold {resolved_threshold}[/dim]\n"
     )
-    counts = {bucket: [c for c in diffs if c.bucket == bucket] for bucket in BUCKET_ORDER}
-    for bucket in BUCKET_ORDER:
-        if counts[bucket]:
-            _render(console, bucket, counts[bucket])
+    _provenance(console, before, after)
+    console.print()
 
-    summary = "  ".join(
-        f"[{BUCKET_STYLE[b]}]{b} {len(counts[b])}[/{BUCKET_STYLE[b]}]" for b in BUCKET_ORDER
-    )
-    console.print(summary)
+    if comparability.suppresses_verdicts:
+        _uncomparable(console, comparability, diffs)
+    else:
+        if comparability.state == UNKNOWN:
+            console.print(
+                f"[yellow]warning: {comparability.detail}. The verdicts below are "
+                "unverified — pass --judge-version to `drift snapshot` so Drift can "
+                "check them.[/yellow]\n"
+            )
+        _buckets(console, diffs)
+
     if removed:
         console.print(
             f"[dim]{len(removed)} case(s) present in {before.path.name[:12]} and gone from "
