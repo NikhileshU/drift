@@ -7,3 +7,7 @@ dist/
 
 # Local Drift state created while exercising the tool on its own repo.
 .drift/
+
+# Local context-index and editor state
+.dual-graph/
+.claude/
