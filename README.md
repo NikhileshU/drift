@@ -15,7 +15,45 @@ pip install -e .
 ## Commands
 
 ```bash
-drift init                                # scaffold .drift/ in the repo root
-drift snapshot --results-file results.json   # snapshot the current commit
-drift diff <hash1> <hash2>                # bucketed diff between two snapshots
+drift init                                   # scaffold .drift/ in the repo root
+drift snapshot --results-file results.json \
+      --model-version claude-opus-5 \
+      --prompt-version support-agent@v7 \
+      --judge-version rubric-2026-08-14      # snapshot the current commit
+drift diff <hash1> <hash2>                   # bucketed diff between two snapshots
 ```
+
+`hash1`/`hash2` accept an unambiguous prefix. `drift diff --threshold 0.1` overrides the
+score delta that counts as Improved/Degraded (default 0.05, or `diff_threshold` in
+`.drift/config.yaml`).
+
+## Buckets
+
+| Bucket | Condition |
+|---|---|
+| Fixed | hash1 fail → hash2 pass |
+| Regressed | hash1 pass → hash2 fail |
+| Improved | both pass, score delta > threshold |
+| Degraded | both pass, score delta < −threshold |
+| Unchanged | delta within threshold |
+| New | `case_id` not present in hash1 |
+
+Score delta is the mean over metrics present in **both** snapshots.
+
+## Immutability
+
+A snapshot directory is never overwritten. Re-running `drift snapshot` on a commit that
+already has one is a hard error, and there is no `--force` — overwriting would make
+every past diff unreproducible.
+
+## Try it
+
+```bash
+drift init
+drift snapshot --results-file examples/demo/baseline.json --judge-version rubric-v1
+git commit --allow-empty -m "next commit"
+drift snapshot --results-file examples/demo/candidate.json --judge-version rubric-v1
+drift diff <first-hash> <second-hash>       # all six buckets, one case each
+```
+
+The schema contract is documented field by field in [`docs/schema.md`](docs/schema.md).

@@ -79,8 +79,8 @@ def _render(console: Console, bucket: str, cases: List[CaseDiff]) -> None:
     )
     table.add_column("case_id", overflow="fold")
     table.add_column("pass", justify="center")
-    table.add_column("score", justify="right")
-    table.add_column("score", justify="right")
+    table.add_column("before", justify="right")
+    table.add_column("after", justify="right")
     table.add_column("delta", justify="right")
     for case in sorted(cases, key=lambda c: c.case_id):
         before = "—" if case.pass_before is None else ("pass" if case.pass_before else "FAIL")
@@ -121,14 +121,13 @@ def diff(
     if before_dir == after_dir:
         _fail(f"both arguments resolve to the same snapshot ({before_dir.name})")
 
-    diffs, removed = compare(
-        _load(before_dir), _load(after_dir), _threshold(drift, threshold)
-    )
+    resolved_threshold = _threshold(drift, threshold)
+    diffs, removed = compare(_load(before_dir), _load(after_dir), resolved_threshold)
 
-    console = Console()
+    console = Console(highlight=False)
     console.print(
         f"\n[bold]{before_dir.name[:12]}[/bold] → [bold]{after_dir.name[:12]}[/bold]  "
-        f"[dim]threshold {_threshold(drift, threshold)}[/dim]\n"
+        f"[dim]threshold {resolved_threshold}[/dim]\n"
     )
     counts = {bucket: [c for c in diffs if c.bucket == bucket] for bucket in BUCKET_ORDER}
     for bucket in BUCKET_ORDER:
