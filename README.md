@@ -40,6 +40,17 @@ score delta that counts as Improved/Degraded (default 0.05, or `diff_threshold` 
 
 Score delta is the mean over metrics present in **both** snapshots.
 
+## Comparability
+
+Scores are only comparable if they came from the same grader. `drift diff` compares the
+two snapshots' `judge_version` and, when it has changed, prints the numbers but
+withholds the verdicts — a "regression" across a rubric edit is usually the rubric, not
+the model. When neither snapshot records a judge version it warns instead of
+suppressing, since that is an absence of evidence rather than evidence of a change.
+
+Pass `--judge-version` to `drift snapshot` so Drift can tell the difference. Full
+behaviour in [`docs/comparability.md`](docs/comparability.md).
+
 ## Immutability
 
 A snapshot directory is never overwritten. Re-running `drift snapshot` on a commit that
@@ -56,4 +67,10 @@ drift snapshot --results-file examples/demo/candidate.json --judge-version rubri
 drift diff <first-hash> <second-hash>       # all six buckets, one case each
 ```
 
-The schema contract is documented field by field in [`docs/schema.md`](docs/schema.md).
+Both snapshots there use `rubric-v1`, so all six buckets are reported. Change one of the
+`--judge-version` values and the same diff comes back with the verdicts withheld.
+
+## Docs
+
+- [`docs/schema.md`](docs/schema.md) — the `results.json` / `manifest.json` contract, field by field.
+- [`docs/comparability.md`](docs/comparability.md) — when and why `drift diff` withholds a verdict.
