@@ -27,3 +27,9 @@ model_config: {}
 # regressions; the remedy for a change you believe is real but cannot clear the floor
 # is more runs, not a smaller sigma. `--noise-sigma` overrides it.
 # noise_sigma: 2.0
+
+# Refuse to snapshot when --judge-version is left at the `unset` placeholder.
+# Off by default. Turn it on once your harness reports a real rubric or judge version:
+# a snapshot is immutable, so provenance missing at write time is missing forever, and
+# `drift diff` cannot tell whether two such snapshots are comparable at all.
+# require_judge_version: true
