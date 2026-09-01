@@ -51,3 +51,19 @@ def test_help_lists_all_three_commands():
     result = runner.invoke(app, ["--help"])
     for command in ("init", "snapshot", "diff"):
         assert command in result.output
+
+
+def test_hand_edited_repo_schema_is_reported_as_stale(git_repo):
+    from getdrift.schema import stale_repo_schemas
+
+    runner.invoke(app, ["init"])
+    drift = git_repo / ".drift"
+    assert stale_repo_schemas(drift) == []
+
+    schema = drift / "schema" / "results.schema.json"
+    schema.write_text(schema.read_text().replace('"minItems": 1', '"minItems": 2'))
+    assert stale_repo_schemas(drift) == ["results.schema.json"]
+
+    # `drift init` always rewrites them, so it is the documented remedy.
+    runner.invoke(app, ["init"])
+    assert stale_repo_schemas(drift) == []

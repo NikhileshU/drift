@@ -1,18 +1,17 @@
 """`drift diff` — bucketed comparison of two snapshots."""
 
-import json
 from pathlib import Path
 from typing import List, Optional
 
 import typer
-import yaml
 from rich.console import Console
 from rich.table import Table
 
-from getdrift.commands import fail
+from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.diffing import BUCKET_ORDER, DEFAULT_THRESHOLD, CaseDiff, compare
 from getdrift.gitutil import GitError
-from getdrift.paths import drift_dir
+from getdrift.paths import drift_dir, read_config
+from getdrift.snapshot import Snapshot, SnapshotError, load_snapshot
 
 BUCKET_STYLE = {
     "Regressed": "bold red",
@@ -24,39 +23,12 @@ BUCKET_STYLE = {
 }
 
 
-def _resolve(snapshots: Path, ref: str) -> Path:
-    """Accept a full hash or an unambiguous prefix of one."""
-    exact = snapshots / ref
-    if exact.is_dir():
-        return exact
-    matches = sorted(p for p in snapshots.glob(f"{ref}*") if p.is_dir())
-    if not matches:
-        fail(f"no snapshot for {ref!r}. `ls .drift/snapshots` to see what exists.")
-    if len(matches) > 1:
-        fail(f"{ref!r} matches {len(matches)} snapshots: {', '.join(p.name for p in matches)}")
-    return matches[0]
-
-
-def _load(snapshot: Path) -> dict:
-    path = snapshot / "results.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        fail(f"{path} is missing — that snapshot directory is incomplete.")
-    except json.JSONDecodeError as exc:
-        fail(f"{path} is not valid JSON: {exc}")
-
-
 def _threshold(drift: Path, override: Optional[float]) -> float:
     if override is not None:
         return override
-    config = drift / "config.yaml"
-    if config.is_file():
-        value = (yaml.safe_load(config.read_text(encoding="utf-8")) or {}).get(
-            "diff_threshold"
-        )
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
+    value = read_config(drift).get("diff_threshold")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
     return DEFAULT_THRESHOLD
 
 
@@ -109,20 +81,20 @@ def diff(
         drift = drift_dir()
     except GitError as exc:
         fail(exc)
-    snapshots = drift / "snapshots"
-    if not snapshots.is_dir():
-        fail("no .drift/snapshots/ in this repo — run `drift init` first")
-
-    before_dir, after_dir = _resolve(snapshots, hash1), _resolve(snapshots, hash2)
-    if before_dir == after_dir:
-        fail(f"both arguments resolve to the same snapshot ({before_dir.name})")
+    warn_if_schemas_stale(drift)
+    try:
+        before, after = load_snapshot(hash1, drift), load_snapshot(hash2, drift)
+    except SnapshotError as exc:
+        fail(exc)
+    if before.path == after.path:
+        fail(f"both arguments resolve to the same snapshot ({before.path.name})")
 
     resolved_threshold = _threshold(drift, threshold)
-    diffs, removed = compare(_load(before_dir), _load(after_dir), resolved_threshold)
+    diffs, removed = compare(before.results, after.results, resolved_threshold)
 
     console = Console(highlight=False)
     console.print(
-        f"\n[bold]{before_dir.name[:12]}[/bold] → [bold]{after_dir.name[:12]}[/bold]  "
+        f"\n[bold]{before.path.name[:12]}[/bold] → [bold]{after.path.name[:12]}[/bold]  "
         f"[dim]threshold {resolved_threshold}[/dim]\n"
     )
     counts = {bucket: [c for c in diffs if c.bucket == bucket] for bucket in BUCKET_ORDER}
@@ -136,6 +108,6 @@ def diff(
     console.print(summary)
     if removed:
         console.print(
-            f"[dim]{len(removed)} case(s) present in {before_dir.name[:12]} and gone from "
-            f"{after_dir.name[:12]}: {', '.join(sorted(removed))}[/dim]"
+            f"[dim]{len(removed)} case(s) present in {before.path.name[:12]} and gone from "
+            f"{after.path.name[:12]}: {', '.join(sorted(removed))}[/dim]"
         )
