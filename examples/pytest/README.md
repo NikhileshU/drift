@@ -63,6 +63,19 @@ drift_judge_version = "rubric-2026-08-14"   # leaving this unset makes drift dif
 
 `--no-drift-snapshot` turns it off for a run.
 
+## Skipped, xfail and xpass
+
+A **skipped** test produced no verdict, so it is not a case — and both mechanisms are
+treated identically. `@pytest.mark.skip` skips during setup and a runtime
+`pytest.skip()` skips during the call phase; if only one were excluded, adding a
+`pytest.skip()` would show up in `drift diff` as **Regressed** and removing it as
+**Fixed**, which is precisely the false signal Drift exists to suppress.
+
+**xfail is not a skip.** pytest reports it as skipped, but the test really ran and
+really failed, so it stays in the snapshot as a failing case with `metadata.xfail` set.
+Dropping it would make a known-failing eval silently vanish from the diff. An xpass is
+recorded as passing.
+
 ## When the plugin does nothing
 
 Deliberately silent, so having Drift installed never disturbs an unrelated suite:
@@ -75,4 +88,11 @@ Deliberately silent, so having Drift installed never disturbs an unrelated suite
 A failing test run is still snapshotted. Recording only green runs would defeat the
 purpose: the failures are what the next diff needs to see get fixed.
 
-**A snapshot never fails your suite.** Every error path above is a warning at worst.
+**A snapshot never fails your suite.** Every error path is a warning at worst, including
+ones nobody anticipated: losing a snapshot is recoverable, losing a green test run is
+not. That holds even under `-W error`, and a `record_property` value that is not JSON
+serialisable is kept as its `repr` rather than costing you the snapshot.
+
+Only `SnapshotExistsError` is reported as routine. Anything else that refuses a snapshot
+— a judge-version policy rejection, say — is surfaced loudly, so a team that opted into
+enforcement cannot quietly stop getting snapshots.
