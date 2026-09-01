@@ -5,6 +5,7 @@ One subcommand per harness. The OTel listener is in-process rather than file-bas
 """
 
 import json
+import shlex
 from pathlib import Path
 
 import typer
@@ -54,4 +55,14 @@ def promptfoo_cmd(
         f"Wrote {output} — {len(results['cases'])} case(s) from {input_file}.",
         fg=typer.colors.GREEN,
     )
-    typer.echo(f"Next: drift snapshot --results-file {output}")
+
+    # promptfoo knows its provider, its prompts and its assertions, so the snapshot's
+    # provenance fields can all be filled in. Left at the `unset` placeholder,
+    # judge_version would make `drift diff`'s comparability check meaningless.
+    fields = results["metadata"]["provenance"]
+    typer.echo("Next:")
+    typer.echo(f"  drift snapshot --results-file {output} \\")
+    for flag in ("model-version", "prompt-version", "judge-version"):
+        value = fields[flag.replace("-", "_")]
+        end = "" if flag == "judge-version" else " \\"
+        typer.echo(f"    --{flag} {shlex.quote(value)}{end}")

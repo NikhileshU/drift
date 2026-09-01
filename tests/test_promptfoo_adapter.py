@@ -75,3 +75,51 @@ def test_metric_name_the_schema_forbids_is_a_loud_error(promptfoo_output):
 def test_non_promptfoo_json_is_rejected():
     with pytest.raises(PromptfooFormatError, match="no `results` array"):
         convert({"nothing": "useful"})
+
+
+def test_provenance_fills_in_all_three_manifest_fields(promptfoo_output):
+    """`unset` judge_version makes drift diff's comparability check useless — avoid it."""
+    from getdrift.adapters.promptfoo import provenance
+
+    fields = provenance(promptfoo_output)
+    assert fields["model_version"] == "echo"
+    assert fields["prompt_version"] == "557aa7663dd9"
+    assert fields["judge_version"].startswith("promptfoo-asserts:sha256:")
+    assert "unset" not in fields.values()
+    # It also rides along in the results.json, so it survives even if the flags are missed.
+    assert convert(promptfoo_output)["metadata"]["provenance"] == fields
+
+
+def test_judge_version_moves_when_the_rubric_changes(promptfoo_output):
+    from getdrift.adapters.promptfoo import provenance
+
+    before = provenance(promptfoo_output)["judge_version"]
+    promptfoo_output["results"]["results"][0]["testCase"]["assert"][0]["value"] = "45 days"
+    assert provenance(promptfoo_output)["judge_version"] != before
+
+
+def test_judge_version_is_stable_when_only_scores_change(promptfoo_output):
+    """Same assertions, different outcomes: the grader did not change, so nor does it."""
+    from getdrift.adapters.promptfoo import provenance
+
+    before = provenance(promptfoo_output)["judge_version"]
+    for row in promptfoo_output["results"]["results"]:
+        row["success"], row["score"], row["namedScores"] = True, 1, {"answer_correctness": 1}
+    assert provenance(promptfoo_output)["judge_version"] == before
+
+
+def test_labelled_prompt_keeps_its_name_and_its_content_hash(promptfoo_output):
+    from getdrift.adapters.promptfoo import provenance
+
+    promptfoo_output["results"]["prompts"][0]["label"] = "support-agent"
+    assert provenance(promptfoo_output)["prompt_version"] == "support-agent@557aa7663dd9"
+
+
+def test_multiple_providers_are_all_recorded(promptfoo_output):
+    from getdrift.adapters.promptfoo import provenance
+
+    rows = promptfoo_output["results"]["results"]
+    extra = json.loads(json.dumps(rows[0]))
+    extra["provider"] = {"id": "openai:gpt-4o", "label": ""}
+    promptfoo_output["results"]["results"] = rows + [extra]
+    assert provenance(promptfoo_output)["model_version"] == "echo,openai:gpt-4o"

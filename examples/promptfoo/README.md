@@ -15,9 +15,12 @@ promptfoo run, just with a deterministic model stand-in.
 ```sh
 npx -y promptfoo@latest eval -c promptfooconfig.yaml -o out.json --no-cache
 drift ingest promptfoo out.json -o results.json
-drift snapshot --results-file results.json \
-  --model-version echo --prompt-version support-agent@v1 --judge-version promptfoo-asserts@v1
 ```
+
+`drift ingest` prints the `drift snapshot` command with `--model-version`,
+`--prompt-version` and `--judge-version` already derived from promptfoo — copy it and
+run it. The same three values are recorded in `results.json` under
+`metadata.provenance`.
 
 The field mapping, and why `case_id` is built the way it is, are in
 [`docs/promptfoo-mapping.md`](../../docs/promptfoo-mapping.md).

@@ -119,11 +119,50 @@ sampled traffic.
 gets it. promptfoo records no per-case time. It already satisfies the schema's
 explicit-offset rule; a run with no timestamp at all falls back to ingestion time.
 
+## Snapshot provenance — the three `drift snapshot` flags
+
+`drift snapshot` takes `--model-version`, `--prompt-version` and `--judge-version`, and
+each defaults to the literal `unset`. Leaving `judge_version` at `unset` is not
+harmless: `drift diff` compares it between two snapshots to decide whether their scores
+were produced by the same grader, and two `unset`s compare equal, so a rubric change
+slips through as a false regression.
+
+promptfoo knows all three, so the adapter derives them. They are written into
+`results.json` under `metadata.provenance`, and `drift ingest promptfoo` prints the
+ready-to-run snapshot command with the values already filled in:
+
+```
+$ drift ingest promptfoo out.json -o results.json
+Wrote results.json — 2 case(s) from out.json.
+Next:
+  drift snapshot --results-file results.json \
+    --model-version echo \
+    --prompt-version 557aa7663dd9 \
+    --judge-version promptfoo-asserts:sha256:c477103ab999
+```
+
+| Manifest field | Derived from | Shape |
+|---|---|---|
+| `model_version` | distinct `provider.id` across the run | `openai:gpt-4o`, or `a,b` for a multi-provider run |
+| `prompt_version` | prompt label + promptfoo's own prompt hash | `support-agent@557aa7663dd9`, or the bare hash when unlabelled |
+| `judge_version` | sha256 over the distinct assertion definitions | `promptfoo-asserts:sha256:c477103ab999` |
+
+**`judge_version` is the assertion set,** because in promptfoo the assertions *are* the
+grader — there is no separate rubric object. Hashing the distinct
+`testCase.assert[]` entries means the value moves when and only when the grading
+criteria move: editing an assertion changes it, a run where the same assertions merely
+produce different scores does not. That is exactly the signal `drift diff` needs.
+
+**`prompt_version` carries both the label and the content hash** (`label@hash`). The
+label alone would stay fixed while someone edits the prompt underneath it; the hash
+alone would be unreadable. promptfoo defaults an unlabelled prompt's label to its own
+raw text, and in that case the value degrades to the bare hash.
+
 ## Run-level metadata
 
 Written to the top-level `metadata` (which Drift never reads):
-`harness: "promptfoo"`, `eval_id`, `description` from the config, promptfoo's
-`stats`, and the source filename.
+`harness: "promptfoo"`, `provenance` (above), `eval_id`, `description` from the
+config, promptfoo's `stats`, and the source filename.
 
 ## Worked example
 

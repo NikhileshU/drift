@@ -48,6 +48,11 @@
   ],
   "metadata": {
     "harness": "promptfoo",
+    "provenance": {
+      "model_version": "echo",
+      "prompt_version": "557aa7663dd9",
+      "judge_version": "promptfoo-asserts:sha256:c477103ab999"
+    },
     "eval_id": "eval-ie8-2026-09-01T10:05:45",
     "description": "Drift sample eval (offline, echo provider)",
     "stats": {

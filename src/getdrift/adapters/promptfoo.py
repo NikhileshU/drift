@@ -113,6 +113,71 @@ def _case_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in metadata.items() if value not in (None, "", {})}
 
 
+def _digest(payload: Any) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def _prompt_versions(document: Any, rows: List[Dict[str, Any]]) -> List[str]:
+    """One version string per distinct prompt: `<label>@<hash>`, or just the hash.
+
+    The hash is over the prompt text, so editing a prompt changes prompt_version even
+    when its label is stable — which is the point. promptfoo defaults an unlabelled
+    prompt's label to its own raw text, so that case degrades to the bare hash.
+    """
+    prompts = (document.get("results") or {}).get("prompts") if isinstance(document, dict) else None
+    if not isinstance(prompts, list) or not prompts:
+        prompts = [row.get("prompt") for row in rows]
+
+    versions = []
+    for prompt in prompts:
+        if not isinstance(prompt, dict):
+            continue
+        raw = prompt.get("raw") or ""
+        short = str(prompt.get("id") or _digest(raw))[:12]
+        label = prompt.get("label")
+        version = f"{label}@{short}" if label and label != raw else short
+        if version not in versions:
+            versions.append(version)
+    return versions
+
+
+def _judge_version(rows: List[Dict[str, Any]]) -> str:
+    """promptfoo's grader is its assertion set, so hash the distinct assertions.
+
+    That makes `judge_version` change exactly when the grading rubric changes, which is
+    what `drift diff` needs it for: two snapshots graded differently are not comparable.
+    """
+    assertions = []
+    for row in rows:
+        for assertion in (row.get("testCase") or {}).get("assert") or []:
+            if isinstance(assertion, dict) and assertion not in assertions:
+                assertions.append(assertion)
+    if not assertions:
+        return "promptfoo-asserts:none"
+    return "promptfoo-asserts:sha256:" + _digest(sorted(assertions, key=lambda a: json.dumps(a, sort_keys=True, default=str)))
+
+
+def provenance(document: Any) -> Dict[str, str]:
+    """The three manifest fields `drift snapshot` asks for, derived from promptfoo.
+
+    promptfoo exposes all three, so none of them has to be left at the `unset`
+    placeholder that makes Drift's comparability check useless.
+    """
+    rows = _rows(document)
+    providers = []
+    for row in rows:
+        provider = row.get("provider")
+        name = str(provider.get("id") or provider.get("label") or "") if isinstance(provider, dict) else str(provider or "")
+        if name and name not in providers:
+            providers.append(name)
+    prompts = _prompt_versions(document, rows)
+    return {
+        "model_version": ",".join(providers) or "unset",
+        "prompt_version": ",".join(prompts) or "unset",
+        "judge_version": _judge_version(rows),
+    }
+
+
 def convert(
     document: Any,
     environment: str = DEFAULT_ENVIRONMENT,
@@ -150,6 +215,7 @@ def convert(
     config = document.get("config") or {} if isinstance(document, dict) else {}
     metadata = {
         "harness": "promptfoo",
+        "provenance": provenance(document),
         "eval_id": document.get("evalId") if isinstance(document, dict) else None,
         "description": config.get("description"),
         "stats": (document.get("results") or {}).get("stats") if isinstance(document, dict) else None,
