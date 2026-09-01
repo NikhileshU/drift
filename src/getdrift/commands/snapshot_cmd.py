@@ -4,8 +4,9 @@ from pathlib import Path
 
 import typer
 
-from getdrift.commands import fail
+from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.gitutil import GitError
+from getdrift.paths import drift_dir
 from getdrift.schema import SchemaValidationError
 from getdrift.snapshot import PLACEHOLDER, SnapshotError, SnapshotExistsError, create_snapshot
 
@@ -30,6 +31,10 @@ def snapshot(
     ),
 ) -> None:
     """Snapshot eval results against the current git commit hash."""
+    try:
+        warn_if_schemas_stale(drift_dir())
+    except GitError:
+        pass  # create_snapshot reports the git problem properly a moment later
     try:
         snap = create_snapshot(
             results_file,

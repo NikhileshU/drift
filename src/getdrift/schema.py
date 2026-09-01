@@ -16,9 +16,17 @@ SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
 RESULTS_SCHEMA_FILENAME = "results.schema.json"
 MANIFEST_SCHEMA_FILENAME = "manifest.schema.json"
 
-#: Schema version Drift writes. Files sharing its major version are accepted.
+#: Schema version Drift writes. A file is accepted when it shares this major version
+#: and its minor version is no newer — see `_version_problem`.
 SCHEMA_VERSION = "1.0.0"
-_MAJOR = SCHEMA_VERSION.split(".")[0]
+_MAJOR, _MINOR = (int(part) for part in SCHEMA_VERSION.split(".")[:2])
+
+#: What `drift snapshot` writes for a provenance field left unflagged. It lives here
+#: rather than beside the writer because it is a contract value with two readers:
+#: `drift diff` has to recognise it too, since two snapshots both carrying it were
+#: graded by unknown — possibly different — judges, and treating that as equal is
+#: exactly the false verdict Drift exists to prevent.
+PLACEHOLDER = "unset"
 
 
 class SchemaValidationError(ValueError):
@@ -48,12 +56,55 @@ def _problems(document: Any, filename: str, drift_dir: Optional[Path]) -> List[s
         for err in sorted(validator.iter_errors(document), key=lambda e: list(e.absolute_path))
     ]
     version = document.get("schema_version") if isinstance(document, dict) else None
-    if isinstance(version, str) and version.split(".")[0] != _MAJOR:
-        problems.append(
+    problem = _version_problem(version)
+    if problem:
+        problems.append(problem)
+    return problems
+
+
+def _version_problem(version: Any) -> Optional[str]:
+    """Why this file's declared schema_version is unusable, or None if it is fine.
+
+    A newer MINOR is rejected as well as a newer major. Minor versions are additive,
+    so an older Drift would validate the file happily against the repo's newer on-disk
+    schema and then silently ignore the fields it has never heard of — reporting
+    confident verdicts computed from the wrong data. Refusing is the only safe answer.
+    """
+    if not isinstance(version, str):
+        return None  # the schema itself already rejects a non-string
+    try:
+        major, minor = (int(part) for part in version.split(".")[:2])
+    except ValueError:
+        return None  # the schema's pattern already rejects a malformed version
+    if major != _MAJOR:
+        return (
             f"schema_version: {version!r} is not compatible with this Drift build, "
             f"which speaks {_MAJOR}.x"
         )
-    return problems
+    if minor > _MINOR:
+        return (
+            f"schema_version: {version!r} was written by a newer Drift; this build "
+            f"speaks {SCHEMA_VERSION} and would silently ignore whatever {version} "
+            "added. Upgrade Drift (pip install -U getdrift)."
+        )
+    return None
+
+
+def stale_repo_schemas(drift_dir: Optional[Path]) -> List[str]:
+    """Schema files in `.drift/schema/` that differ from the ones this build ships.
+
+    They should be identical: `drift init` always rewrites them. A difference means
+    the repo was initialised by a different Drift version or the files were hand-edited,
+    and validation reads the repo's copy — so it is worth saying out loud.
+    """
+    if drift_dir is None:
+        return []
+    stale = []
+    for packaged in sorted(SCHEMAS_DIR.glob("*.schema.json")):
+        on_disk = drift_dir / "schema" / packaged.name
+        if on_disk.is_file() and on_disk.read_bytes() != packaged.read_bytes():
+            stale.append(packaged.name)
+    return stale
 
 
 def _duplicate_case_ids(document: Any) -> List[str]:

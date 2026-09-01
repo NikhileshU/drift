@@ -17,10 +17,12 @@ from typing import Any, Dict, Optional, Union
 from getdrift import __version__
 from getdrift.gitutil import has_uncommitted_changes, head_hash
 from getdrift.paths import drift_dir
-from getdrift.schema import SCHEMA_VERSION, validate_manifest, validate_results
-
-#: Written to the manifest's version fields when the caller supplies nothing.
-PLACEHOLDER = "unset"
+from getdrift.schema import (
+    PLACEHOLDER,
+    SCHEMA_VERSION,
+    validate_manifest,
+    validate_results,
+)
 
 
 class SnapshotError(RuntimeError):
