@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from getdrift import __version__
-from getdrift.gitutil import has_uncommitted_changes, head_hash
+from getdrift.gitutil import has_uncommitted_changes, head_hash, resolve_ref
 from getdrift.paths import drift_dir, read_config
 from getdrift.schema import (
     PLACEHOLDER,
@@ -40,7 +40,8 @@ class ResultsFileError(SnapshotError):
 
 
 class SnapshotNotFoundError(SnapshotError):
-    """No snapshot matches the given hash, or a prefix matches more than one."""
+    """No snapshot for the given ref, a prefix is ambiguous, or a hash-prefix and a
+    git-ref resolution of the same string name two different snapshots."""
 
 
 class MissingJudgeVersionError(SnapshotError):
@@ -259,27 +260,67 @@ def create_snapshot(
 
 
 def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
-    """Snapshot directory for a full commit hash or an unambiguous prefix of one."""
+    """Snapshot directory for a full commit hash, an unambiguous prefix, or a git ref.
+
+    `ref` can be a hash prefix (Drift's own vocabulary) or anything git recognizes —
+    `HEAD`, `HEAD~1`, a branch, a tag — since every snapshot is already keyed to a
+    real commit and reusing git's vocabulary beats inventing a second one.
+
+    A full 40-character hash match is exact and returns immediately without ever
+    calling git: it cannot collide with a ref, because git only treats a 40-hex-char
+    string as a literal object id, never as a name to look up.
+
+    For anything shorter, BOTH the hash-prefix candidate and the git-ref candidate are
+    computed before either is returned — never short-circuited on whichever resolves
+    first. If a ref is also a valid hash prefix and the two name different snapshots,
+    that is raised as an ambiguity naming both, rather than one silently winning.
+    Hash-prefix is tried before git only because a snapshot's commit hash is Drift's
+    own permanent identifier, while a ref name is mutable — the natural fallback, not
+    the primary. Since both are always computed, that order only decides which
+    candidate is named first in the ambiguity error.
+    """
     base = drift if drift is not None else drift_dir()
     snapshots = base / "snapshots"
     if not snapshots.is_dir():
         raise NotInitializedError(
             "no .drift/snapshots/ in this repo — run `drift init` first"
         )
+
     exact = snapshots / ref
     if exact.is_dir():
         return exact
+
     matches = sorted(p for p in snapshots.glob(f"{ref}*") if p.is_dir())
-    if not matches:
-        raise SnapshotNotFoundError(
-            f"no snapshot for {ref!r}. `ls .drift/snapshots` to see what exists."
-        )
     if len(matches) > 1:
         raise SnapshotNotFoundError(
             f"{ref!r} matches {len(matches)} snapshots: "
             + ", ".join(p.name for p in matches)
         )
-    return matches[0]
+    prefix_candidate = matches[0] if matches else None
+
+    git_hash = resolve_ref(ref)
+    git_candidate = snapshots / git_hash if git_hash and (snapshots / git_hash).is_dir() else None
+
+    if prefix_candidate and git_candidate and prefix_candidate != git_candidate:
+        raise SnapshotNotFoundError(
+            f"{ref!r} is ambiguous: it matches snapshot {prefix_candidate.name} by "
+            f"hash prefix, but git resolves it to commit {git_candidate.name}. Use "
+            "the full hash of the one you mean."
+        )
+
+    if prefix_candidate:
+        return prefix_candidate
+    if git_candidate:
+        return git_candidate
+
+    if git_hash:
+        raise SnapshotNotFoundError(
+            f"{ref!r} resolves to commit {git_hash}, but nothing was snapshotted "
+            "there. Run `drift snapshot` at that commit, or pick a different ref."
+        )
+    raise SnapshotNotFoundError(
+        f"no snapshot for {ref!r}. `ls .drift/snapshots` to see what exists."
+    )
 
 
 def load_snapshot(ref: str, drift: Optional[Path] = None) -> Snapshot:

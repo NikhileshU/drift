@@ -6,7 +6,7 @@ needs two facts — where the repo root is, and what HEAD is.
 
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 class GitError(RuntimeError):
@@ -58,3 +58,17 @@ def commits_on(ref: str) -> List[str]:
     a snapshot taken late for an old commit cannot masquerade as the latest baseline.
     """
     return _git("rev-list", ref).splitlines()
+
+
+def resolve_ref(ref: str) -> Optional[str]:
+    """Full commit hash `ref` resolves to via git, or None if it is not a valid rev.
+
+    Peels an annotated tag to the commit it points at (`^{commit}`), so `HEAD~1`,
+    `main`, and tag names all come back as a plain commit hash. Returns None rather
+    than raising for an unresolvable ref — that is not exceptional here, it just means
+    this candidate is absent, and the caller decides what absence means.
+    """
+    try:
+        return _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    except GitError:
+        return None
