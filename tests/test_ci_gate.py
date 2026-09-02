@@ -1,0 +1,242 @@
+"""P4-D1: `drift ci`. A false negative here means broken evals ship silently."""
+import json
+import subprocess
+
+import pytest
+from typer.testing import CliRunner
+
+from getdrift.cli import app
+from tests.test_diffing import DEMO
+
+runner = CliRunner()
+
+CLEAN = json.loads((DEMO / "baseline.json").read_text())
+
+
+def _write(repo, name, document):
+    path = repo / name
+    path.write_text(json.dumps(document))
+    return path
+
+
+def _snapshot(repo, document, **flags):
+    args = ["snapshot", "--results-file", str(_write(repo, "r.json", document))]
+    for key, value in flags.items():
+        args += [f"--{key.replace('_', '-')}", value]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _commit(repo, message):
+    (repo / "README.md").write_text(message + "\n")
+    subprocess.run(["git", "commit", "-aqm", message], cwd=repo, check=True)
+
+
+def _pair(repo, candidate, *, baseline=None, judge="rubric@1", judge2=None):
+    """A baseline snapshot on `main`, then a second snapshot one commit later."""
+    runner.invoke(app, ["init"])
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
+    first = _snapshot(repo, baseline or CLEAN, judge_version=judge)
+    _commit(repo, "v2")
+    second = _snapshot(repo, candidate, judge_version=judge2 or judge)
+    return first, second
+
+
+def _mutate(**by_case):
+    doc = json.loads(json.dumps(CLEAN))
+    for case in doc["cases"]:
+        change = by_case.get(case["case_id"])
+        if change:
+            case.update(change)
+    return doc
+
+
+REGRESSED = "escalation_tone_angry"
+STABLE = "greeting_smoke_test"
+
+
+# --- the four cases the spec names -------------------------------------------
+
+
+def test_clean_pass_exits_zero(git_repo):
+    first, second = _pair(git_repo, CLEAN)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 0, result.output
+    assert "PASS" in result.output
+
+
+def test_a_regression_fails_the_build_and_names_the_case(git_repo):
+    first, second = _pair(git_repo, _mutate(**{REGRESSED: {"pass": False}}))
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 1
+    assert "FAIL" in result.output
+    assert REGRESSED in result.output
+
+
+def test_a_judge_change_blocks_the_build_with_a_clear_reason(git_repo):
+    """A changed rubric must block exactly like a regression: the diff is untrustworthy."""
+    first, second = _pair(git_repo, CLEAN, judge="rubric@1", judge2="rubric@2")
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 1
+    assert "FAIL" in result.output
+    assert "rubric@1" in result.output and "rubric@2" in result.output
+    # and it must not be silent about *why* — a bare exit code is the failure mode
+    assert "not directly comparable" in result.output.lower()
+
+
+def test_a_dirty_tree_is_flagged_but_still_gated(git_repo):
+    first, second = _pair(git_repo, CLEAN)
+    (git_repo / "README.md").write_text("uncommitted\n")
+    result = runner.invoke(app, ["ci", "--baseline", first])  # --current defaults to HEAD
+    assert result.exit_code == 0, result.output
+    assert "uncommitted changes" in result.output
+    assert second[:8] in result.output
+
+
+# --- the table must be in the log, not just an exit code ---------------------
+
+
+def test_the_bucketed_table_is_printed_before_a_failing_exit(git_repo):
+    """A CI log showing only `exit 1` is useless — the spec's requirement (c)."""
+    first, second = _pair(git_repo, _mutate(**{REGRESSED: {"pass": False}}))
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 1
+    assert "Regressed (1)" in result.output
+    assert result.output.index("Regressed (1)") < result.output.index("FAIL")
+
+
+def test_a_judge_mismatch_still_shows_the_numbers(git_repo):
+    first, second = _pair(git_repo, CLEAN, judge="rubric@1", judge2="rubric@2")
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert "Scores only, no verdict" in result.output
+    assert result.output.index("Scores only") < result.output.index("FAIL")
+
+
+# --- --fail-on ---------------------------------------------------------------
+
+
+def test_degraded_alone_passes_the_default_gate(git_repo):
+    """A score drop with both runs passing is not a regression under the default."""
+    first, second = _pair(git_repo, _mutate(**{STABLE: {"metric_scores":
+        {"answer_correctness": 0.30, "citation_precision": 0.30}}}))
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert "Degraded (1)" in result.output
+    assert result.exit_code == 0, result.output
+
+
+def test_degraded_fails_under_fail_on_degraded(git_repo):
+    first, second = _pair(git_repo, _mutate(**{STABLE: {"metric_scores":
+        {"answer_correctness": 0.30, "citation_precision": 0.30}}}))
+    result = runner.invoke(
+        app, ["ci", "--baseline", first, "--current", second, "--fail-on", "degraded"]
+    )
+    assert result.exit_code == 1
+    assert STABLE in result.output
+
+
+def test_fail_on_degraded_still_catches_regressions(git_repo):
+    """The stricter mode must be a superset, never a different set."""
+    first, second = _pair(git_repo, _mutate(**{REGRESSED: {"pass": False}}))
+    result = runner.invoke(
+        app, ["ci", "--baseline", first, "--current", second, "--fail-on", "degraded"]
+    )
+    assert result.exit_code == 1
+    assert REGRESSED in result.output
+
+
+def test_an_unknown_fail_on_value_is_rejected(git_repo):
+    first, second = _pair(git_repo, CLEAN)
+    result = runner.invoke(
+        app, ["ci", "--baseline", first, "--current", second, "--fail-on", "everything"]
+    )
+    assert result.exit_code != 0
+    assert "PASS" not in result.output
+
+
+# --- defaults ----------------------------------------------------------------
+
+
+def test_baseline_defaults_to_the_newest_snapshot_on_the_default_branch(git_repo):
+    first, second = _pair(git_repo, _mutate(**{REGRESSED: {"pass": False}}))
+    result = runner.invoke(app, ["ci", "--current", second])
+    assert result.exit_code == 1
+    assert first[:12] in result.output
+
+
+def test_a_push_build_on_the_default_branch_compares_against_the_previous_snapshot(
+    git_repo,
+):
+    """HEAD is itself on `main` here — the sample workflow's own push path.
+
+    Naively "newest snapshot on the default branch" resolves to the commit under test,
+    and the gate would compare a snapshot against itself.
+    """
+    first, second = _pair(git_repo, _mutate(**{REGRESSED: {"pass": False}}))
+    result = runner.invoke(app, ["ci"])  # no --baseline AND no --current
+    assert result.exit_code == 1, result.output
+    assert f"{first[:12]}" in result.output and f"{second[:12]}" in result.output
+    assert "nothing to gate on" not in result.output
+    assert REGRESSED in result.output
+
+
+def test_default_branch_is_configurable(git_repo):
+    _pair(git_repo, CLEAN)
+    config = git_repo / ".drift" / "config.yaml"
+    config.write_text(config.read_text() + '\ndefault_branch: "nope"\n')
+    result = runner.invoke(app, ["ci"])
+    assert result.exit_code == 1
+    assert "nope" in result.output
+
+
+def test_no_snapshot_on_the_default_branch_is_a_clear_error(git_repo):
+    runner.invoke(app, ["init"])
+    subprocess.run(["git", "branch", "-M", "main"], cwd=git_repo, check=True)
+    result = runner.invoke(app, ["ci"])
+    assert result.exit_code == 1
+    assert "no snapshot found" in result.output
+
+
+def test_the_same_snapshot_on_both_sides_is_refused(git_repo):
+    first, _ = _pair(git_repo, CLEAN)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", first])
+    assert result.exit_code == 1
+    assert "nothing to gate on" in result.output
+
+
+# --- the case nobody writes a test for ---------------------------------------
+
+
+def test_an_unrecorded_judge_version_warns_but_does_not_block(git_repo):
+    """UNKNOWN is not MISMATCH. Blocking here would break every team pre-adoption."""
+    runner.invoke(app, ["init"])
+    subprocess.run(["git", "branch", "-M", "main"], cwd=git_repo, check=True)
+    first = _snapshot(git_repo, CLEAN)          # no --judge-version
+    _commit(git_repo, "v2")
+    second = _snapshot(git_repo, CLEAN)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 0, result.output
+    assert "unverified" in result.output
+
+
+def test_a_new_failing_case_is_not_smuggled_past_the_gate(git_repo):
+    """A case absent from the baseline buckets as New, which is NOT Regressed.
+
+    It still must not read as a clean pass: the gate says PASS, and the New row
+    carrying `FAIL` is the only thing in the log that says otherwise.
+    """
+    doc = json.loads(json.dumps(CLEAN))
+    doc["cases"].append({
+        "case_id": "brand_new_and_broken",
+        "metric_scores": {"answer_correctness": 0.1},
+        "pass": False,
+        "environment": "golden_set",
+        "timestamp": "2026-09-02T09:41:02Z",
+    })
+    first, second = _pair(git_repo, doc)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert "New (1)" in result.output
+    assert "brand_new_and_broken" in result.output
+    assert result.exit_code == 0, result.output

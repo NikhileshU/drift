@@ -6,6 +6,7 @@ needs two facts — where the repo root is, and what HEAD is.
 
 import subprocess
 from pathlib import Path
+from typing import List
 
 
 class GitError(RuntimeError):
@@ -47,3 +48,13 @@ def head_hash() -> str:
 def has_uncommitted_changes() -> bool:
     """True when tracked files differ from HEAD, so HEAD does not describe the tree."""
     return bool(_git("status", "--porcelain", "--untracked-files=no"))
+
+
+def commits_on(ref: str) -> List[str]:
+    """Commit hashes reachable from `ref`, newest first.
+
+    Used to pick a CI baseline: the newest commit on the default branch that actually
+    has a snapshot. Ordering by reachability rather than by manifest timestamps means
+    a snapshot taken late for an old commit cannot masquerade as the latest baseline.
+    """
+    return _git("rev-list", ref).splitlines()

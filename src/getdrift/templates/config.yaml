@@ -33,3 +33,7 @@ model_config: {}
 # a snapshot is immutable, so provenance missing at write time is missing forever, and
 # `drift diff` cannot tell whether two such snapshots are comparable at all.
 # require_judge_version: true
+
+# Branch `drift ci` reads its default --baseline from: the newest commit on this
+# branch that has a snapshot. Only consulted when --baseline is omitted.
+default_branch: "main"

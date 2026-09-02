@@ -1,0 +1,108 @@
+# Sample: gate a pull request on eval regressions with `drift ci`.
+#
+# Copy into .github/workflows/ of the repo whose evals you are tracking. This is a
+# TEMPLATE — the "Run evals" step is a placeholder for however your team produces a
+# results.json (promptfoo, pytest, an OTel run, your own harness).
+#
+# What it does: snapshots this commit, then compares it against the newest snapshot on
+# your default branch. The job fails if any case went pass -> fail, or if the judge
+# version changed (a rubric change makes the comparison untrustworthy either way).
+name: evals
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The gate needs a baseline, which means your default branch must already have
+# snapshots. That is what the second job below does.
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # REQUIRED. `drift ci` walks the default branch to find a baseline snapshot,
+          # which a shallow clone does not contain. Without this the gate cannot find a
+          # baseline and fails with "no snapshot found on 'main'".
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Drift
+        run: pip install getdrift
+
+      - name: Run evals
+        # REPLACE THIS with your harness. It must produce a results.json conforming to
+        # .drift/schema/results.schema.json. Ready-made paths:
+        #   promptfoo: promptfoo eval -o out.json && drift ingest promptfoo out.json
+        #   pytest:    pip install getdrift && pytest   (the plugin snapshots for you)
+        # The stub below is a real, schema-valid one-case file so this sample runs
+        # unmodified; it tells you nothing useful until you swap it out.
+        run: |
+          cat > results.json <<'JSON'
+          {
+            "schema_version": "1.0.0",
+            "cases": [
+              {
+                "case_id": "replace-me",
+                "metric_scores": {"accuracy": 1.0},
+                "pass": true,
+                "environment": "golden_set",
+                "timestamp": "2026-01-01T00:00:00Z"
+              }
+            ]
+          }
+          JSON
+
+      - name: Snapshot this commit
+        # --judge-version is what lets the gate tell "the model changed" from "the
+        # rubric changed". Without it the gate still runs but says so, unverified.
+        run: |
+          drift snapshot \
+            --results-file results.json \
+            --model-version "${{ vars.MODEL_VERSION || 'unset' }}" \
+            --prompt-version "${{ github.sha }}" \
+            --judge-version "${{ vars.JUDGE_VERSION || 'unset' }}"
+
+      - name: Gate on regressions
+        # Exit 0 = nothing regressed. Exit 1 = a case went pass -> fail, or the judge
+        # version changed. Use --fail-on degraded to also block score drops where both
+        # runs still pass.
+        run: drift ci
+
+  # Keep the default branch's eval history current, so pull requests have something to
+  # be compared against. Without this the gate has no baseline on the very first run.
+  baseline:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install getdrift
+
+      - name: Run evals
+        run: echo "REPLACE with the same eval command as the job above, writing results.json"
+
+      - name: Snapshot and commit the eval history
+        # Snapshots are immutable and keyed by commit hash, so this only ever adds a
+        # directory. `drift snapshot` refuses rather than overwriting if one exists,
+        # hence the `|| true` on a re-run of the same commit.
+        run: |
+          drift snapshot --results-file results.json \
+            --judge-version "${{ vars.JUDGE_VERSION || 'unset' }}" || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .drift/snapshots
+          git diff --staged --quiet || git commit -m "drift: snapshot ${{ github.sha }}"
+          git push
