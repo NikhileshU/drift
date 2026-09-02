@@ -71,6 +71,7 @@ def test_ref_resolved_by_git_but_never_snapshotted_is_a_distinct_error(git_repo)
     message = str(exc.value)
     assert "nothing was snapshotted there" in message
     assert "no snapshot for" not in message
+    assert "drift log" in message
 
 
 def test_hash_prefix_and_git_ref_naming_different_snapshots_is_ambiguous(git_repo):
@@ -91,8 +92,12 @@ def test_hash_prefix_and_git_ref_naming_different_snapshots_is_ambiguous(git_rep
 
 
 def test_unknown_ref_keeps_the_original_wording(git_repo):
+    """P5-D2: points at `drift log`, not `ls .drift/snapshots` — the command now exists."""
     _init(git_repo)
     create_snapshot(DEMO / "baseline.json")
     with pytest.raises(SnapshotNotFoundError) as exc:
         resolve_snapshot("totally-not-a-ref-or-hash")
-    assert "no snapshot for" in str(exc.value)
+    message = str(exc.value)
+    assert "no snapshot for" in message
+    assert "drift log" in message
+    assert "ls .drift" not in message

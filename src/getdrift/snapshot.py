@@ -316,10 +316,11 @@ def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
     if git_hash:
         raise SnapshotNotFoundError(
             f"{ref!r} resolves to commit {git_hash}, but nothing was snapshotted "
-            "there. Run `drift snapshot` at that commit, or pick a different ref."
+            "there. Run `drift snapshot` at that commit, or `drift log` to see what "
+            "has one."
         )
     raise SnapshotNotFoundError(
-        f"no snapshot for {ref!r}. `ls .drift/snapshots` to see what exists."
+        f"no snapshot for {ref!r}. `drift log` to see what exists."
     )
 
 
