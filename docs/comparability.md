@@ -110,6 +110,20 @@ false all-clear.
 
 ## Exit codes
 
-`drift diff` exits 0 in all three states, including MISMATCH. Exit-code semantics belong
-to the CI gate and are being designed as one contract rather than established piecemeal;
-until then, do not build a gate on this command's exit status.
+`drift diff` exits 0 in all three states, including MISMATCH. It is a reporting command:
+its job is to show you the comparison, not to judge it, and that has not changed.
+
+**Gate on `drift ci`, not on `drift diff`.** `drift ci` runs the same comparison and does
+carry exit-code semantics — `0` when the gate passes, `1` when it fails — and a MISMATCH
+fails it:
+
+```
+The gate cannot pass: with the rubric changed, a clean diff is not evidence that
+nothing broke. Re-snapshot the baseline under the new judge version, then
+re-run.
+```
+
+That is the point of the state existing. A rubric change makes the comparison
+uninterpretable in both directions, so a clean diff is not evidence of safety, and a gate
+that passed on one would be worse than a gate that failed. See
+[`ci-integration.md`](ci-integration.md).

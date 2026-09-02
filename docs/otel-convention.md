@@ -117,3 +117,15 @@ collector.write("results.json")   # validated against the schema before writing
 
 `write()` validates before it writes, so a convention bug fails at ingestion time
 rather than at `drift snapshot` time.
+
+
+## One run per case
+
+This adapter emits one run per case — `metric_scores` and `pass`, with no `runs` array.
+That is valid and is exactly the pre-1.1.0 shape, but it means a case has no standard
+deviation, so the noise floor is 0 and `drift diff` buckets on the raw threshold alone.
+
+To get a noise estimate, have the harness score each case more than once and emit the
+`runs` array described in [`schema.md`](schema.md#casesruns--one-repeated-run-schema-110).
+Repeating a case is what makes a real change separable from sampling variance; at one run
+there is no estimate to make.

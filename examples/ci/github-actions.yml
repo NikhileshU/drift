@@ -32,13 +32,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install Drift
-        run: pip install getdrift
+        run: pip install git+https://github.com/NikhileshU/drift
 
       - name: Run evals
         # REPLACE THIS with your harness. It must produce a results.json conforming to
         # .drift/schema/results.schema.json. Ready-made paths:
         #   promptfoo: promptfoo eval -o out.json && drift ingest promptfoo out.json
-        #   pytest:    pip install getdrift && pytest   (the plugin snapshots for you)
+        #   pytest:    pip install git+https://github.com/NikhileshU/drift && pytest   (the plugin snapshots for you)
         # The stub below is a real, schema-valid one-case file so this sample runs
         # unmodified; it tells you nothing useful until you swap it out.
         run: |
@@ -89,7 +89,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install getdrift
+      - run: pip install git+https://github.com/NikhileshU/drift
 
       - name: Run evals
         run: echo "REPLACE with the same eval command as the job above, writing results.json"

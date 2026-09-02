@@ -480,7 +480,7 @@ Install with the `[dev]` extra, not a bare `pip install -e .` — the OTel adapt
 import `opentelemetry`, and without it `tests/test_otel_adapter.py` fails during
 *collection*, which reads like a broken checkout rather than a missing dependency.
 
-The suite is 219 tests.
+The suite is 239 tests.
 
 ## License
 
