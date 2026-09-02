@@ -62,6 +62,10 @@ def _filtered_note(console: Console, diffs: List[CaseDiff]) -> None:
     threshold but stayed inside the noise floor, and a pass flip that did not survive
     the majority across runs. Both cases still appear in Unchanged with their real
     numbers; this is the line that stops them looking like nothing happened.
+
+    Painted yellow for that reason. `dim` is what this tool means by "nothing to see" —
+    it is the Unchanged bucket's own colour — so a note whose entire job is to say
+    something DID happen must not be wearing it.
     """
     noisy = [c for c in diffs if c.noise_filtered]
     flips = [c for c in diffs if c.pass_flip_filtered]
@@ -71,8 +75,8 @@ def _filtered_note(console: Console, diffs: List[CaseDiff]) -> None:
     ):
         if cases:
             console.print(
-                f"[dim]{len(cases)} case(s) {reason}: "
-                f"{', '.join(sorted(c.case_id for c in cases))}[/dim]"
+                f"[yellow]{len(cases)} case(s) {reason}: "
+                f"{', '.join(sorted(c.case_id for c in cases))}[/yellow]"
             )
 
 
@@ -242,7 +246,14 @@ def diff(
         _filtered_note(console, diffs)
 
     if removed:
+        # Yellow, on a narrower argument than "removals matter". A suppressed case is
+        # still visible in the Unchanged table with its real numbers, so its note is
+        # supplementary. A removed case appears NOWHERE else in this output — miss this
+        # line and there is no other signal that the eval set shrank. It is also how a
+        # changed case_id manifests, which is silent loss of coverage rather than a
+        # deliberate edit. Information that appears exactly once should not be wearing
+        # the colour that means "safe to skip".
         console.print(
-            f"[dim]{len(removed)} case(s) present in {before.path.name[:12]} and gone from "
-            f"{after.path.name[:12]}: {', '.join(sorted(removed))}[/dim]"
+            f"[yellow]{len(removed)} case(s) present in {before.path.name[:12]} and gone "
+            f"from {after.path.name[:12]}: {', '.join(sorted(removed))}[/yellow]"
         )
