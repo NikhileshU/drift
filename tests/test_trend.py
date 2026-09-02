@@ -240,3 +240,49 @@ def test_a_snapshot_without_a_manifest_sorts_last_and_is_named(tmp_path):
 def test_no_snapshots_directory_is_an_empty_history_not_a_crash(tmp_path):
     assert load_history(tmp_path) == []
     assert case_trend("c", drift=tmp_path).points == []
+
+
+def test_same_second_snapshots_are_ordered_by_commit_ancestry(git_repo):
+    """`created_at` has whole-second precision, so CI routinely ties on it.
+
+    Found by running `drift trend` on a real repo: five snapshots taken inside two
+    seconds came back shuffled, because the tiebreak was commit hash — which has no
+    order. A shuffled history invents slow drifts and flip-flops that never happened,
+    so this is a correctness bug in the data layer, not a cosmetic one.
+    """
+    import json
+    import subprocess
+
+    same_second = "2026-09-01T09:00:00Z"
+    commits = []
+    for index in range(4):
+        subprocess.run(
+            ["git", "commit", "-q", "--allow-empty", "-m", f"c{index}"],
+            cwd=git_repo, check=True,
+        )
+        commits.append(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True
+            ).stdout.strip()
+        )
+
+    drift = git_repo / ".drift"
+    # Written in reverse, so directory iteration order cannot accidentally be right.
+    for index, commit in reversed(list(enumerate(commits))):
+        directory = drift / "snapshots" / commit
+        directory.mkdir(parents=True)
+        (directory / "results.json").write_text(json.dumps({
+            "schema_version": "1.1.0",
+            "cases": [{"case_id": "c", "metric_scores": {"accuracy": 0.9 - index * 0.03},
+                       "pass": True, "environment": "golden_set",
+                       "timestamp": same_second}],
+        }))
+        (directory / "manifest.json").write_text(json.dumps({
+            "commit_hash": commit, "created_at": same_second, "judge_version": "v1",
+        }))
+
+    assert [s.commit_hash for s in load_history(drift)] == commits
+    trend = case_trend("c", drift=drift)
+    assert [round(p.score, 3) for p in trend.points] == [0.900, 0.870, 0.840, 0.810]
+    assert trend.slow_drift is not None
+    assert trend.slow_drift.snapshots == 4

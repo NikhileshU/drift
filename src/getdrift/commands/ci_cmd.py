@@ -16,6 +16,7 @@ from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.commands.diff_cmd import (
     _buckets,
     _filtered_note,
+    _removed_note,
     _noise_sigma,
     _provenance,
     _threshold,
@@ -184,10 +185,3 @@ def ci(
         f"\n[bold green]PASS — nothing in {'/'.join(blocking)}.[/bold green]"
     )
 
-
-def _removed_note(console: Console, removed: List[str], before: str, after: str) -> None:
-    if removed:
-        console.print(
-            f"[yellow]{len(removed)} case(s) present in {before[:12]} and gone from "
-            f"{after[:12]}: {', '.join(sorted(removed))}[/yellow]"
-        )

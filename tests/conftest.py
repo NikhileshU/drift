@@ -33,3 +33,23 @@ def example_manifest():
 @pytest.fixture()
 def invalid_results():
     return json.loads((EXAMPLES / "results.invalid.json").read_text())
+
+
+@pytest.fixture()
+def forced_color(monkeypatch):
+    """Make colour available regardless of the terminal the suite is running in.
+
+    Styling assertions are about what Drift *emits*, not about what the ambient
+    terminal supports. Left to inherit the environment they pass on a developer's
+    laptop and fail in CI, where there is no TTY and `NO_COLOR` is often set — which
+    is rich behaving correctly, not a bug.
+
+    Note that `Console(force_terminal=True, color_system="standard")` is NOT enough on
+    its own: `NO_COLOR` overrides it, stripping colour while leaving bold intact. And
+    `CliRunner(color=True)` only colours the runner's own capture, not the Console a
+    command constructs internally. Normalising the environment is the one mechanism
+    that covers both.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("TERM", "xterm-256color")

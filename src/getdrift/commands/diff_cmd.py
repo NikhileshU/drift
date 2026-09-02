@@ -36,6 +36,13 @@ BUCKET_STYLE = {
 #: diff comes back flagged as uncomparable.
 PROVENANCE = ("judge_version", "model_version", "prompt_version")
 
+#: Plain-ASCII prefixes on the two notes that report withheld or lost cases. They exist
+#: because colour does not survive a CI log, and these are the lines that must. Distinct
+#: from the lowercase `warning:` used elsewhere: nothing here is wrong, something is
+#: being withheld or has gone missing, and the two deserve different words.
+SUPPRESSED_MARKER = "SUPPRESSED:"
+REMOVED_MARKER = "REMOVED:"
+
 
 def _threshold(drift: Path, override: Optional[float]) -> float:
     if override is not None:
@@ -66,6 +73,18 @@ def _filtered_note(console: Console, diffs: List[CaseDiff]) -> None:
     Painted yellow for that reason. `dim` is what this tool means by "nothing to see" —
     it is the Unchanged bucket's own colour — so a note whose entire job is to say
     something DID happen must not be wearing it.
+
+    But colour cannot be the only carrier. `Console` does ordinary TTY auto-detection,
+    and CI captures output through a pipe, so rich correctly strips every escape code
+    the moment this runs unattended — which is precisely where a Drift diff is read
+    with nobody looking at a coloured terminal. Without a marker the note then renders
+    byte-for-byte like any other line in the log. Hence the literal `SUPPRESSED:`
+    prefix: plain ASCII, survives colour stripping, and greppable, which colour never
+    was. Colour is the bonus for interactive use, not the signal.
+
+    The harm in one line: `grep -i warning` over a CI log finds the judge-version
+    warning and finds nothing at all for a suppressed case. That is why the fix is a
+    marker and not a better colour.
     """
     noisy = [c for c in diffs if c.noise_filtered]
     flips = [c for c in diffs if c.pass_flip_filtered]
@@ -75,7 +94,7 @@ def _filtered_note(console: Console, diffs: List[CaseDiff]) -> None:
     ):
         if cases:
             console.print(
-                f"[yellow]{len(cases)} case(s) {reason}: "
+                f"[yellow]{SUPPRESSED_MARKER} {len(cases)} case(s) {reason}: "
                 f"{', '.join(sorted(c.case_id for c in cases))}[/yellow]"
             )
 
@@ -247,13 +266,25 @@ def diff(
 
     if removed:
         # Yellow, on a narrower argument than "removals matter". A suppressed case is
-        # still visible in the Unchanged table with its real numbers, so its note is
-        # supplementary. A removed case appears NOWHERE else in this output — miss this
-        # line and there is no other signal that the eval set shrank. It is also how a
-        # changed case_id manifests, which is silent loss of coverage rather than a
-        # deliberate edit. Information that appears exactly once should not be wearing
-        # the colour that means "safe to skip".
+        _removed_note(console, removed, before.path.name, after.path.name)
+
+
+def _removed_note(console: Console, removed: List[str], before: str, after: str) -> None:
+    """The cases that were in the baseline and are gone from the candidate.
+
+    Lives here, and is imported by `drift ci`, rather than existing twice. `drift diff`
+    and `drift ci` making the same statement in two places is how they end up making it
+    differently — the same reason `case_stats` has one home.
+
+    Marked and coloured for the reason above `_filtered_note`, with one addition: a
+    suppressed case is still visible in the Unchanged table with its real numbers, so
+    its note is supplementary. A removed case appears NOWHERE else in the output. Miss
+    this line and there is no other signal that the eval set shrank, and it is also how
+    a changed `case_id` manifests — silent loss of coverage rather than a deliberate
+    edit. Information that appears exactly once must survive a monochrome log.
+    """
+    if removed:
         console.print(
-            f"[yellow]{len(removed)} case(s) present in {before.path.name[:12]} and gone "
-            f"from {after.path.name[:12]}: {', '.join(sorted(removed))}[/yellow]"
+            f"[yellow]{REMOVED_MARKER} {len(removed)} case(s) present in {before[:12]} "
+            f"and gone from {after[:12]}: {', '.join(sorted(removed))}[/yellow]"
         )

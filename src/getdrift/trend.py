@@ -19,6 +19,7 @@ print for that pair, computed by the same code. A second implementation would ev
 disagree with the first, and a trend that contradicts the diff is worse than no trend.
 """
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -115,13 +116,39 @@ class MetricTrend:
         return self.slow_drift is not None or bool(self.flip_flopping_cases)
 
 
+def _ancestry(base: Path) -> Dict[str, int]:
+    """Each commit's position in the repo's history, oldest first.
+
+    Needed as a tiebreak because `created_at` is written to whole-second precision:
+    any two snapshots taken in the same second — routine in CI, and trivial in a
+    scripted run — compare equal on it. Falling back to commit hash there orders them
+    effectively at random, and a randomly ordered history invents slow drifts and
+    flip-flops that never happened. Commit ancestry is the only real answer to which
+    of two snapshots came first.
+    """
+    try:
+        output = subprocess.run(
+            ["git", "rev-list", "--topo-order", "--all"],
+            cwd=base.parent,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        ).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    # rev-list is newest first; invert so older commits sort earlier.
+    return {commit: len(output) - index for index, commit in enumerate(output)}
+
+
 def load_history(drift: Optional[Path] = None) -> List[Snapshot]:
     """Every snapshot in the repo, oldest first by its manifest's `created_at`.
 
     Ordered by `created_at` rather than by commit hash because hashes have no order,
     and rather than by directory mtime because that changes when files are copied.
-    A snapshot whose manifest cannot be read has no timestamp; it is placed last in
-    commit-hash order so the sequence stays deterministic instead of arbitrary.
+    Ties on `created_at` — same-second snapshots — are broken by commit ancestry; see
+    `_ancestry`. A snapshot whose manifest cannot be read has no timestamp at all and
+    is placed last, so it cannot silently land in the middle and distort the sequence.
     """
     base = drift if drift is not None else drift_dir()
     snapshots = base / "snapshots"
@@ -137,12 +164,14 @@ def load_history(drift: Optional[Path] = None) -> List[Snapshot]:
             # An unreadable snapshot directory is skipped rather than aborting the
             # whole history: one bad directory should not hide nine good ones.
             continue
-    return sorted(loaded, key=_ordering_key)
+    ancestry = _ancestry(base)
+    return sorted(loaded, key=lambda s: _ordering_key(s, ancestry))
 
 
-def _ordering_key(snapshot: Snapshot):
+def _ordering_key(snapshot: Snapshot, ancestry: Optional[Dict[str, int]] = None):
     created = (snapshot.manifest or {}).get("created_at")
-    return (created is None, created or "", snapshot.commit_hash)
+    position = (ancestry or {}).get(snapshot.commit_hash, -1)
+    return (created is None, created or "", position, snapshot.commit_hash)
 
 
 def _case_of(snapshot: Snapshot, case_id: str) -> Optional[Dict[str, Any]]:
