@@ -21,6 +21,7 @@ from getdrift.diffing import (
 from getdrift.gitutil import GitError
 from getdrift.paths import drift_dir, read_config
 from getdrift.snapshot import Snapshot, SnapshotError, load_snapshot
+from getdrift.trend import load_history
 
 BUCKET_STYLE = {
     "Regressed": "bold red",
@@ -205,9 +206,34 @@ def _uncomparable(
     )
 
 
+def _most_recent(drift: Path, count: int) -> List[Snapshot]:
+    """The `count` newest snapshots, oldest first, or fail with a clear reason.
+
+    Built on `load_history()` from `trend.py` rather than a second ordering: it
+    already sorts by the manifest's `created_at` (falling back to commit ancestry for
+    same-second ties) and already tolerates undated or unreadable snapshots.
+    """
+    history = load_history(drift)
+    if len(history) < count:
+        noun = "snapshot" if len(history) == 1 else "snapshots"
+        fail(
+            f"only {len(history)} {noun} in .drift/snapshots/ — need at least {count}. "
+            "`drift snapshot` a few more commits, or pass both hashes explicitly."
+        )
+    return history[-count:]
+
+
 def diff(
-    hash1: str = typer.Argument(..., help="Baseline snapshot commit hash (or a prefix)."),
-    hash2: str = typer.Argument(..., help="Candidate snapshot commit hash (or a prefix)."),
+    hash1: Optional[str] = typer.Argument(
+        None,
+        help="Baseline snapshot commit hash (or a prefix). Omit both arguments to "
+        "compare the two most recent snapshots; give only this one to compare it "
+        "against the most recent — the same direction the two-hash form already "
+        "reads in (baseline -> candidate, older -> newer).",
+    ),
+    hash2: Optional[str] = typer.Argument(
+        None, help="Candidate snapshot commit hash (or a prefix)."
+    ),
     threshold: Optional[float] = typer.Option(
         None,
         "--threshold",
@@ -223,14 +249,25 @@ def diff(
         f"the raw threshold alone.",
     ),
 ) -> None:
-    """Diff two snapshots into Fixed/Regressed/Improved/Degraded/Unchanged/New."""
+    """Diff two snapshots into Fixed/Regressed/Improved/Degraded/Unchanged/New.
+
+    With no arguments, compares the two most recent snapshots by timestamp — "what did
+    my last change do" is the question this command exists to answer, and it should
+    cost no typing. With one, compares that snapshot against the most recent.
+    """
     try:
         drift = drift_dir()
     except GitError as exc:
         fail(exc)
     warn_if_schemas_stale(drift)
     try:
-        before, after = load_snapshot(hash1, drift), load_snapshot(hash2, drift)
+        if hash1 is None:
+            before, after = _most_recent(drift, 2)
+        elif hash2 is None:
+            before = load_snapshot(hash1, drift)
+            after = _most_recent(drift, 1)[0]
+        else:
+            before, after = load_snapshot(hash1, drift), load_snapshot(hash2, drift)
     except SnapshotError as exc:
         fail(exc)
     if before.path == after.path:

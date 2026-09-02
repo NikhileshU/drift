@@ -66,3 +66,54 @@ def test_same_snapshot_twice_is_rejected(git_repo):
     result = runner.invoke(app, ["diff", first, first])
     assert result.exit_code == 1
     assert "same snapshot" in result.output
+
+
+# --- P5-A1: `drift diff` with no args, or one -------------------------------------
+
+
+def _three_snapshots(repo):
+    """Three snapshots on distinct commits, oldest first as written."""
+    runner.invoke(app, ["init"])
+    first = _snapshot(repo, DEMO / "baseline.json")
+    (repo / "README.md").write_text("v2\n")
+    subprocess.run(["git", "commit", "-aqm", "v2"], cwd=repo, check=True)
+    second = _snapshot(repo, DEMO / "candidate.json")
+    (repo / "README.md").write_text("v3\n")
+    subprocess.run(["git", "commit", "-aqm", "v3"], cwd=repo, check=True)
+    third = _snapshot(repo, DEMO / "baseline.json")
+    return first, second, third
+
+
+def test_no_args_compares_the_two_most_recent_snapshots(git_repo):
+    first, second, third = _three_snapshots(git_repo)
+    zero_args = runner.invoke(app, ["diff"])
+    explicit = runner.invoke(app, ["diff", second, third])
+    assert zero_args.exit_code == 0
+    assert zero_args.output == explicit.output
+    assert first[:12] not in zero_args.output.split("threshold")[0]
+
+
+def test_one_arg_compares_it_against_the_most_recent(git_repo):
+    first, second, third = _three_snapshots(git_repo)
+    one_arg = runner.invoke(app, ["diff", first])
+    explicit = runner.invoke(app, ["diff", first, third])
+    assert one_arg.exit_code == 0
+    assert one_arg.output == explicit.output
+
+
+def test_no_args_with_fewer_than_two_snapshots_is_a_clear_error(git_repo):
+    runner.invoke(app, ["init"])
+    _snapshot(git_repo, DEMO / "baseline.json")
+    result = runner.invoke(app, ["diff"])
+    assert result.exit_code == 1
+    assert "only 1 snapshot" in result.output
+    assert "need at least 2" in result.output
+
+
+def test_the_explicit_two_hash_form_is_unchanged(git_repo):
+    """P5-A1 must not touch the existing behaviour when both hashes are given."""
+    first, second, third = _three_snapshots(git_repo)
+    result = runner.invoke(app, ["diff", first, second])
+    assert result.exit_code == 0
+    assert first[:12] in result.output and second[:12] in result.output
+    assert third[:12] not in result.output.split("threshold")[0]
