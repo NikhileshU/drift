@@ -38,6 +38,28 @@ arrives after you have already been confused, so do it as part of the upgrade.
   Degraded, Unchanged or New. Accepts unambiguous hash prefixes. `--threshold` overrides
   the score delta that counts as Improved/Degraded (default `0.05`, or `diff_threshold`
   in `.drift/config.yaml`).
+- **`drift ingest promptfoo <out.json>`** — converts a promptfoo run into a schema-valid
+  `results.json` and prints the ready-to-run `drift snapshot` command with the derived
+  provenance filled in. `--environment` overrides the default `golden_set`.
+
+### The pytest plugin — a snapshot with no code in your test files
+
+Installing `getdrift` registers a `pytest11` plugin. In a repo that has run `drift init`,
+running `pytest` writes a snapshot of the eval results automatically — no conftest entry,
+no decorator, no edit to your test files. It is deliberately quiet: re-running `pytest` on
+an unchanged commit is the normal case and is not an error, a repo without `.drift/` is a
+silent no-op, and no failure inside Drift can fail a test run that otherwise passed.
+
+### Requiring a real judge version
+
+`judge_version` defaults to the literal `unset`, and two `unset` values compare equal —
+which would let a rubric change land as a clean false regression. `drift diff` handles the
+reporting side (see Comparability below), but the snapshot still carries no provenance and
+snapshots are never backfilled. Teams that want the guarantee can set
+`require_judge_version: true` in `.drift/config.yaml`; `drift snapshot` then refuses rather
+than writing a placeholder. It is **off by default**, so no existing invocation changes, and
+it is enforced in `create_snapshot()` rather than the CLI so in-process callers cannot
+bypass it.
 
 ### The schema contract
 
@@ -82,8 +104,14 @@ gate on this command's exit status yet.
 
 ### For adapter and plugin authors
 
-Harness adapters (`drift ingest`) are not in this release; they land separately. The
-API below is what they are written against.
+Harness adapters ARE in this release. `drift ingest promptfoo <out.json>` converts a
+promptfoo run into a schema-valid `results.json`, and `getdrift.adapters.otel` provides a
+`DriftSpanCollector` (an OTel `SpanProcessor`) plus a pure `case_from_span()`. Both validate
+at ingestion, so a convention or mapping bug surfaces there rather than at snapshot time.
+`opentelemetry-sdk` is an optional extra (`pip install getdrift[otel]`), not a dependency.
+
+The API below is what they are written against, and is equally what your own adapter should
+use.
 
 `getdrift.snapshot` is an importable API behind the CLI — `create_snapshot`,
 `load_snapshot`, `resolve_snapshot`, and a `Snapshot` dataclass carrying `.results`,

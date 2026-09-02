@@ -11,3 +11,4 @@ dist/
 # Local context-index and editor state
 .dual-graph/
 .claude/
+CLAUDE.md
