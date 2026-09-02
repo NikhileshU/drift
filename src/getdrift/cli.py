@@ -5,6 +5,7 @@ import typer
 from getdrift import __version__
 from getdrift.commands.ci_cmd import ci
 from getdrift.commands.diff_cmd import diff
+from getdrift.commands.log_cmd import log
 from getdrift.commands.trend_cmd import trend
 from getdrift.commands.ingest_cmd import ingest
 from getdrift.commands.init_cmd import init
@@ -38,6 +39,7 @@ app.command("snapshot")(snapshot)
 app.command("diff")(diff)
 app.command("ci")(ci)
 app.command("trend")(trend)
+app.command("log")(log)
 app.add_typer(ingest)
 
 
