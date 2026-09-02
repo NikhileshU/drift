@@ -12,3 +12,14 @@ dist/
 .dual-graph/
 .claude/
 CLAUDE.md
+
+# macOS Finder
+.DS_Store
+
+# Agent-hive scaffolding — coordination state, not part of the tool.
+hive/
+palace/
+roster.json
+roster-backups/
+hallways.json
+tunnels.json
