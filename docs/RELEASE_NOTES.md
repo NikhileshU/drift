@@ -1,6 +1,6 @@
 # Drift release notes
 
-## 0.1.0 — unreleased (Phases 0–3)
+## 0.1.0 — unreleased (Phases 0–4)
 
 First working version: immutable eval snapshots keyed by git commit, a six-bucket diff
 between any two, a strict schema contract, and a diff that refuses to give you a verdict
@@ -185,3 +185,122 @@ eight cases, sampled from a pinned seed, four verdicts changed by the filter and
 those four were false. It includes one case where the filter hides a *real* drop, because
 at three runs and that much variance it genuinely is not separable from noise — the
 remedy there is more runs, never a smaller sigma.
+
+---
+
+### Phase 4 — the CI gate and the trend view
+
+Still part of the same unreleased 0.1.0. Nothing has been published; install from git.
+
+#### `drift ci` — the same diff, plus an exit code
+
+```bash
+drift ci [--baseline <hash>] [--current <hash>] [--fail-on regression|degraded]
+```
+
+Runs exactly the comparison `drift diff` runs, on the same buckets, and turns it into an
+exit status: `0` when the gate passes, `1` when it fails. It prints the whole bucketed
+table **before** exiting, so a CI log shows which case broke rather than only a red X.
+
+Both hashes are optional. `--current` defaults to `HEAD`. `--baseline` defaults to the
+newest commit on your default branch that has a snapshot, which is read from a **new
+`default_branch` config key** (`.drift/config.yaml`, default `main`) and is only
+consulted when you omit the flag.
+
+`--fail-on regression` (the default) fails when a case went pass → fail. `--fail-on
+degraded` also fails on a score drop that clears the threshold with both runs still
+passing. `--threshold` and `--noise-sigma` behave as they do for `drift diff`.
+
+**A judge-version MISMATCH fails the gate.** This is the part worth knowing before you
+wire it up. When the two snapshots record different judge versions, `drift ci` exits
+non-zero even if not one case regressed:
+
+```
+The gate cannot pass: with the rubric changed, a clean diff is not evidence that
+nothing broke. Re-snapshot the baseline under the new judge version, then
+re-run.
+```
+
+That follows from what comparability already meant. A rubric change makes the comparison
+uninterpretable in *both* directions, so a clean diff is not evidence of safety, and
+passing a build on a diff Drift has already declined to interpret would be worse than
+failing it. The remedy is in the message.
+
+**An UNKNOWN comparability state warns but does not block.** When *neither* snapshot
+records a judge version, the gate still runs and still decides on the buckets; it prints
+a warning saying the result is unverified. Absence of evidence is not evidence of a
+grader change, so it is not treated as one. Set `require_judge_version: true` in
+`.drift/config.yaml` if you would rather that be impossible than merely warned about.
+
+Wiring, for GitHub Actions and GitLab CI, is in
+[`ci-integration.md`](ci-integration.md); a copyable workflow is in
+[`../examples/ci/github-actions.yml`](../examples/ci/github-actions.yml). Two things
+that bite: the gate needs full git history (`fetch-depth: 0`) because it walks the
+default branch for a baseline, and it needs that branch to already have snapshots.
+
+#### `drift trend` — reading a case across its whole history
+
+```bash
+drift trend <case_id>          # one case across every snapshot
+drift trend --metric <name>    # one metric, averaged across the cases carrying it
+```
+
+`drift diff` compares two snapshots, which is the right unit for reviewing one change and
+structurally blind to anything that is a property of a *sequence*. `drift trend` walks
+every snapshot in `.drift/snapshots/`, ordered by each manifest's `created_at`, running
+the same pairwise comparison between consecutive pairs — no new bucketing logic — and
+flags two patterns:
+
+**Slow drift.** A decline where no individual step was ever large enough to be called a
+regression, so every diff along the way said Unchanged, correctly. Flagged only when
+**all three** hold:
+
+1. the score strictly decreases at every step (a flat step ends the run);
+2. no step in the run was already reported Degraded or Regressed — if one was, pairwise
+   diffing has already told you and there is nothing hidden to surface;
+3. the run's **total** drop exceeds the raw threshold.
+
+The third condition is doing real work: without it a series wobbling down by thousandths
+would flag, and if the whole decline is smaller than what a single diff would have called
+noise, there is no hidden regression. A run must span at least three snapshots, and a
+snapshot the case is missing from ends the run rather than being bridged across.
+
+**Flip-flopping.** Pass/fail alternating two or more times. Every adjacent pair produces a
+confident Regressed or Fixed, so any one diff would send a reviewer hunting for a breaking
+commit that does not exist; only the sequence shows the case has been flapping. Snapshots
+the case is absent from are skipped, not counted as a change — a case that was not run did
+not fail.
+
+Neither detector is a gate: a flagged pattern does not change the exit code, and
+`drift ci` does not consult it. `drift trend` exits 0 whether or not it flags something,
+and 1 only on a usage error such as a `case_id` no snapshot contains. How to read the
+output is in [`trend-view.md`](trend-view.md).
+
+#### Your diff output has changed: `SUPPRESSED:` and `REMOVED:`
+
+If you are upgrading, expect two lines to look different. The notes that report withheld
+or missing cases now carry **literal text markers**:
+
+```
+SUPPRESSED: 3 case(s) moved past the threshold but stayed inside the noise
+floor: mixed-n, noise-swing, small-drift-noisy
+SUPPRESSED: 1 case(s) had a pass flip that did not survive the majority across
+runs: flaky-pass
+REMOVED: 1 case(s) present in 15dd05db03fe and gone from a4352a3136bb:
+legacy_fax_number_lookup
+```
+
+There are two `SUPPRESSED:` reasons, not one — a score move the noise floor withheld, and
+a pass/fail flip that did not survive the majority vote across a case's runs. They are
+reported separately because they are different findings.
+
+These lines previously relied on colour alone to stand out. Colour does not survive a
+monochrome CI log, a piped `>` redirect, or a pasted excerpt — and these are precisely the
+lines that must survive, because both report something *absent* from the table above them.
+A withheld case and a dropped case are the two things a reader is least likely to notice
+missing and most likely to need.
+
+The words are deliberately distinct from the lowercase `warning:` used elsewhere: nothing
+here is wrong, something is being withheld or has gone missing, and those deserve
+different words. If you grep your CI logs for Drift output, these are stable strings to
+match on.

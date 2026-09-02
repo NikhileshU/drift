@@ -156,7 +156,9 @@ part of the history says so instead of looking like a shorter project.
 
 ## What it does not do
 
-Neither detector is a gate. `drift trend` reports; it does not exit non-zero, and
-`drift ci` does not consult it. Slow drift and instability are judgement calls about
-whether a case is still worth trusting, and neither has a threshold that would be honest
-to fail a build on.
+Neither detector is a gate. A flagged `SLOW DRIFT` or `FLIP-FLOPPING` does not change
+the exit code — `drift trend` exits 0 whether or not it flags something, and `drift ci`
+does not consult it. (It does exit 1 on a usage error, such as a `case_id` that appears
+in no snapshot.) Slow drift and instability are judgement calls about whether a case is
+still worth trusting, and neither has a threshold that would be honest to fail a build
+on.
