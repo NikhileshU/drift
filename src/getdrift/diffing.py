@@ -147,16 +147,21 @@ def _runs_of(case: Dict[str, Any]) -> List[Dict[str, Any]]:
     return case.get("runs") or [case]
 
 
-def _stats(case: Dict[str, Any], shared: List[str]) -> CaseStats:
-    """Mean and standard deviation of the case's per-run scores over `shared` metrics."""
+def case_stats(case: Dict[str, Any], metrics: List[str]) -> CaseStats:
+    """Mean and standard deviation of the case's per-run scores over `metrics`.
+
+    Public because the trend view reduces a case to exactly these numbers. Two
+    implementations of "what this case scored" would eventually disagree, and the
+    disagreement would show up as a trend that contradicts the diff.
+    """
     runs = _runs_of(case)
     scores = []
     for run in runs:
-        values = [run["metric_scores"][m] for m in shared if m in run["metric_scores"]]
-        # A run that carries none of the shared metrics falls back to the case-level
+        values = [run["metric_scores"][m] for m in metrics if m in run["metric_scores"]]
+        # A run that carries none of the requested metrics falls back to the case-level
         # scores, which are required and therefore always complete.
         if not values:
-            values = [case["metric_scores"][m] for m in shared if m in case["metric_scores"]]
+            values = [case["metric_scores"][m] for m in metrics if m in case["metric_scores"]]
         if values:
             scores.append(_mean(values))
     passes = sum(1 for run in runs if run["pass"])
@@ -190,7 +195,7 @@ def _bucket_case(
     noise_sigma: float,
 ) -> CaseDiff:
     if before is None:
-        fresh = _stats(after, sorted(after["metric_scores"]))
+        fresh = case_stats(after, sorted(after["metric_scores"]))
         return CaseDiff(
             case_id=after["case_id"],
             bucket="New",
@@ -207,7 +212,7 @@ def _bucket_case(
     # Only metrics present in both runs are comparable; a metric added or dropped
     # between commits would otherwise show up as a score change that never happened.
     shared = sorted(set(before["metric_scores"]) & set(after["metric_scores"]))
-    old, new = _stats(before, shared), _stats(after, shared)
+    old, new = case_stats(before, shared), case_stats(after, shared)
     delta = None if old.mean is None or new.mean is None else new.mean - old.mean
 
     # The two thresholds are combined with max(), never by replacement. A single-run
