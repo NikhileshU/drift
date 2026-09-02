@@ -45,3 +45,16 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 getdrift = ["schemas/*.json", "templates/*.yaml"]
+
+[tool.pytest.ini_options]
+# The suite is `tests/`, and only `tests/`. Without this, what "the tests" means depends
+# on how pytest was invoked: a bare run from the repo root also collects
+# `examples/pytest/tests/`, which is sample eval data, not a test of Drift. Two people
+# then report two different totals for the same commit. The example suite is still
+# protected — `tests/test_pytest_plugin.py` runs it the way a user would.
+testpaths = ["tests"]
+# `testpaths` only applies when no path is given on the command line, so
+# `pytest /path/to/drift` from elsewhere would still descend into examples/ and collect
+# five more. Excluding it from recursion makes the count identical however you invoke it.
+# (These are pytest's own defaults plus `examples`.)
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "examples"]

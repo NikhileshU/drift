@@ -6,6 +6,7 @@ does the work with no conftest, no flag and no import in the user's files.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -262,3 +263,41 @@ plugin.create_snapshot = _explode
 
     assert result.returncode == 0
     assert "unexpected RuntimeError" in result.stdout
+
+
+# --- the shipped example suite, exercised the way a user would ----------------
+
+EXAMPLE_SUITE = Path(__file__).resolve().parent.parent / "examples" / "pytest"
+
+
+def test_the_shipped_example_suite_still_snapshots(tmp_path):
+    """`examples/pytest/` is sample data, not a test of Drift — so it is run from here.
+
+    It is excluded from collection by `testpaths`, which would leave it free to rot:
+    nothing else would notice if the plugin stopped reading `record_property`, or if the
+    README's promise that this suite snapshots with no Drift import quietly stopped
+    being true. Running it as a fixture keeps that promise checked without letting
+    sample data inflate the suite's own count.
+    """
+    shutil.copytree(EXAMPLE_SUITE / "tests", tmp_path / "tests")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    for key, value in (("user.email", "t@example.com"), ("user.name", "T")):
+        subprocess.run(["git", "config", key, value], cwd=tmp_path, check=True)
+    commit = _commit(tmp_path, "example suite")
+    _init_drift(tmp_path)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout.strip()
+
+    result = _run_pytest(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Drift: snapshot written" in result.stdout
+
+    results = _snapshot(tmp_path, commit)
+    ids = {case["case_id"] for case in results["cases"]}
+    # The parametrised golden set keeps its ids, which is what makes the diff joinable.
+    assert any(i.endswith("test_agent_answers[refund_policy_multi_turn]") for i in ids)
+    # And record_property scores still land as real metrics, not just pass/fail.
+    scored = [c for c in results["cases"] if "answer_similarity" in c["metric_scores"]]
+    assert scored, f"no case carried answer_similarity: {ids}"
+    assert all(case["pass"] for case in results["cases"])
