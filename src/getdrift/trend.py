@@ -1,0 +1,330 @@
+"""Trend across a case's whole snapshot history — the regressions pairwise diffing cannot see.
+
+`drift diff` compares two snapshots. Two failure modes are invisible to it by
+construction, no matter how good its thresholds are:
+
+* **Slow drift.** A case loses a little quality at every commit, never enough for any
+  single step to clear the regression threshold. Every diff along the way says
+  Unchanged, correctly, and the case is materially worse than it was ten commits ago.
+* **Flip-flopping.** A case alternates between passing and failing across the history.
+  Any one diff sees a normal Fixed or Regressed; only the sequence shows that the case
+  is unstable rather than that it changed.
+
+Both are properties of a *sequence*, so seeing them requires walking the whole history.
+This module is the pure data layer for that: no CLI, no rendering.
+
+Bucketing is not reimplemented here. Every consecutive pair goes through the existing
+`compare()`, so the trend's per-step verdicts are the same verdicts `drift diff` would
+print for that pair, computed by the same code. A second implementation would eventually
+disagree with the first, and a trend that contradicts the diff is worse than no trend.
+"""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
+
+from getdrift.diffing import (
+    DEFAULT_NOISE_SIGMA,
+    DEFAULT_THRESHOLD,
+    case_stats,
+    compare,
+)
+from getdrift.paths import drift_dir
+from getdrift.snapshot import Snapshot, load_snapshot
+
+#: Consecutive declining snapshots before a slow drift is worth reporting. Three points
+#: is two steps: the smallest sequence that is a trend rather than a single change.
+MIN_DRIFT_RUN = 3
+
+#: Pass/fail transitions before a case counts as unstable. Two is the smallest number
+#: that can only be alternation — one transition is an ordinary Fixed or Regressed.
+MIN_FLIPS = 2
+
+
+@dataclass
+class TrendPoint:
+    """One case at one snapshot, plus how it moved from the snapshot before it."""
+
+    commit_hash: str
+    created_at: Optional[str]
+    score: Optional[float]
+    passed: Optional[bool]
+    #: Verdict against the previous snapshot, straight from `compare()`. None for the
+    #: first point in the history, and for any point where the case was absent.
+    bucket: Optional[str]
+    #: False when the case does not appear in this snapshot at all. A gap is not a
+    #: failure and must not be read as one.
+    present: bool = True
+
+
+@dataclass
+class SlowDrift:
+    """A monotonic decline no single diff along the way called a regression."""
+
+    start_commit: str
+    end_commit: str
+    snapshots: int
+    first_score: float
+    last_score: float
+
+    @property
+    def total_drop(self) -> float:
+        return self.first_score - self.last_score
+
+
+@dataclass
+class FlipFlop:
+    """A case alternating between passing and failing."""
+
+    transitions: int
+    #: The commits at which the verdict changed, in order.
+    at_commits: List[str] = field(default_factory=list)
+
+
+@dataclass
+class CaseTrend:
+    """The full history of one case, with the sequence-level patterns flagged."""
+
+    case_id: str
+    points: List[TrendPoint]
+    slow_drift: Optional[SlowDrift] = None
+    flip_flop: Optional[FlipFlop] = None
+    #: Snapshots whose manifest could not be read, so they have no `created_at` to
+    #: order by. Ordered last, by commit hash, and named so a caller can say so.
+    undated: List[str] = field(default_factory=list)
+
+    @property
+    def flagged(self) -> bool:
+        return self.slow_drift is not None or self.flip_flop is not None
+
+
+@dataclass
+class MetricTrend:
+    """One metric averaged across every case that carries it, snapshot by snapshot."""
+
+    metric: str
+    points: List[TrendPoint]
+    slow_drift: Optional[SlowDrift] = None
+    #: Flip-flopping is a property of an individual case, not of an average, so it is
+    #: reported per case rather than folded into the aggregate series.
+    flip_flopping_cases: List[str] = field(default_factory=list)
+    undated: List[str] = field(default_factory=list)
+
+    @property
+    def flagged(self) -> bool:
+        return self.slow_drift is not None or bool(self.flip_flopping_cases)
+
+
+def load_history(drift: Optional[Path] = None) -> List[Snapshot]:
+    """Every snapshot in the repo, oldest first by its manifest's `created_at`.
+
+    Ordered by `created_at` rather than by commit hash because hashes have no order,
+    and rather than by directory mtime because that changes when files are copied.
+    A snapshot whose manifest cannot be read has no timestamp; it is placed last in
+    commit-hash order so the sequence stays deterministic instead of arbitrary.
+    """
+    base = drift if drift is not None else drift_dir()
+    snapshots = base / "snapshots"
+    if not snapshots.is_dir():
+        return []
+    loaded = []
+    for path in snapshots.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            loaded.append(load_snapshot(path.name, base))
+        except Exception:
+            # An unreadable snapshot directory is skipped rather than aborting the
+            # whole history: one bad directory should not hide nine good ones.
+            continue
+    return sorted(loaded, key=_ordering_key)
+
+
+def _ordering_key(snapshot: Snapshot):
+    created = (snapshot.manifest or {}).get("created_at")
+    return (created is None, created or "", snapshot.commit_hash)
+
+
+def _case_of(snapshot: Snapshot, case_id: str) -> Optional[Dict[str, Any]]:
+    return next(
+        (c for c in snapshot.results.get("cases", []) if c["case_id"] == case_id), None
+    )
+
+
+def _buckets_between(
+    previous: Snapshot, current: Snapshot, threshold: float, noise_sigma: float
+) -> Dict[str, str]:
+    """Every case's verdict for one consecutive pair, via the real diff engine."""
+    diffs, _ = compare(previous.results, current.results, threshold, noise_sigma)
+    return {diff.case_id: diff.bucket for diff in diffs}
+
+
+def _detect_slow_drift(points: Sequence[TrendPoint], threshold: float) -> Optional[SlowDrift]:
+    """The longest run of consecutive snapshots that declined without ever regressing.
+
+    Three conditions, all required:
+
+    1. The score strictly decreases at every step. A flat step is not a decline.
+    2. No step in the run was called Degraded or Regressed. If one was, pairwise
+       diffing already reported it and there is nothing hidden to surface.
+    3. The run's total drop exceeds the raw threshold. Without this a series that
+       wobbles down by a thousandth would flag; there is no hidden regression if the
+       whole decline is smaller than what a single diff would have called noise.
+
+    Only points where the case is present take part; a snapshot the case is missing
+    from ends the run rather than silently bridging across it.
+    """
+    best: Optional[SlowDrift] = None
+    run: List[TrendPoint] = []
+
+    def close(run: List[TrendPoint]) -> Optional[SlowDrift]:
+        if len(run) < MIN_DRIFT_RUN:
+            return None
+        drop = run[0].score - run[-1].score
+        if drop <= threshold:
+            return None
+        return SlowDrift(
+            start_commit=run[0].commit_hash,
+            end_commit=run[-1].commit_hash,
+            snapshots=len(run),
+            first_score=run[0].score,
+            last_score=run[-1].score,
+        )
+
+    for point in points:
+        if not point.present or point.score is None:
+            best = _longer(best, close(run))
+            run = []
+            continue
+        if run and point.score < run[-1].score and point.bucket not in ("Degraded", "Regressed"):
+            run.append(point)
+            continue
+        best = _longer(best, close(run))
+        run = [point]
+    return _longer(best, close(run))
+
+
+def _longer(current: Optional[SlowDrift], candidate: Optional[SlowDrift]) -> Optional[SlowDrift]:
+    if candidate is None:
+        return current
+    if current is None or candidate.snapshots > current.snapshots:
+        return candidate
+    return current
+
+
+def _detect_flip_flop(points: Sequence[TrendPoint]) -> Optional[FlipFlop]:
+    """Pass/fail alternating two or more times.
+
+    Snapshots the case is absent from are skipped rather than counted as a change:
+    a case that was not run did not fail.
+    """
+    verdicts = [(p.commit_hash, p.passed) for p in points if p.present and p.passed is not None]
+    at = [
+        commit
+        for (_, before), (commit, after) in zip(verdicts, verdicts[1:])
+        if before != after
+    ]
+    return FlipFlop(len(at), at) if len(at) >= MIN_FLIPS else None
+
+
+def _points_for_case(
+    case_id: str, history: Sequence[Snapshot], threshold: float, noise_sigma: float
+) -> List[TrendPoint]:
+    points = []
+    for index, snapshot in enumerate(history):
+        case = _case_of(snapshot, case_id)
+        bucket = None
+        if case is not None and index:
+            bucket = _buckets_between(
+                history[index - 1], snapshot, threshold, noise_sigma
+            ).get(case_id)
+        stats = case_stats(case, sorted(case["metric_scores"])) if case else None
+        points.append(
+            TrendPoint(
+                commit_hash=snapshot.commit_hash,
+                created_at=(snapshot.manifest or {}).get("created_at"),
+                score=stats.mean if stats else None,
+                passed=stats.passed if stats else None,
+                bucket=bucket,
+                present=case is not None,
+            )
+        )
+    return points
+
+
+def case_trend(
+    case_id: str,
+    history: Optional[Sequence[Snapshot]] = None,
+    drift: Optional[Path] = None,
+    threshold: float = DEFAULT_THRESHOLD,
+    noise_sigma: float = DEFAULT_NOISE_SIGMA,
+) -> CaseTrend:
+    """One case across every snapshot, with slow drift and flip-flopping flagged.
+
+    `history` is accepted so callers — and tests — can supply snapshots directly
+    instead of going through the filesystem.
+    """
+    snapshots = list(history) if history is not None else load_history(drift)
+    points = _points_for_case(case_id, snapshots, threshold, noise_sigma)
+    return CaseTrend(
+        case_id=case_id,
+        points=points,
+        slow_drift=_detect_slow_drift(points, threshold),
+        flip_flop=_detect_flip_flop(points),
+        undated=_undated(snapshots),
+    )
+
+
+def _undated(history: Sequence[Snapshot]) -> List[str]:
+    return [s.commit_hash for s in history if not (s.manifest or {}).get("created_at")]
+
+
+def metric_trend(
+    metric: str,
+    history: Optional[Sequence[Snapshot]] = None,
+    drift: Optional[Path] = None,
+    threshold: float = DEFAULT_THRESHOLD,
+    noise_sigma: float = DEFAULT_NOISE_SIGMA,
+) -> MetricTrend:
+    """One metric averaged over every case carrying it, across the whole history.
+
+    The aggregate has no pass/fail of its own — averaging verdicts would invent a
+    number nobody can act on — so its points carry no `passed` or `bucket`, and
+    instability is reported as the list of cases that individually flip-flop.
+    """
+    snapshots = list(history) if history is not None else load_history(drift)
+    points, case_ids = [], set()
+    for snapshot in snapshots:
+        scoring = [
+            case_stats(case, [metric]).mean
+            for case in snapshot.results.get("cases", [])
+            if metric in case["metric_scores"]
+        ]
+        case_ids.update(
+            case["case_id"]
+            for case in snapshot.results.get("cases", [])
+            if metric in case["metric_scores"]
+        )
+        present = [value for value in scoring if value is not None]
+        points.append(
+            TrendPoint(
+                commit_hash=snapshot.commit_hash,
+                created_at=(snapshot.manifest or {}).get("created_at"),
+                score=sum(present) / len(present) if present else None,
+                passed=None,
+                bucket=None,
+                present=bool(present),
+            )
+        )
+    flipping = sorted(
+        case_id
+        for case_id in case_ids
+        if _detect_flip_flop(_points_for_case(case_id, snapshots, threshold, noise_sigma))
+    )
+    return MetricTrend(
+        metric=metric,
+        points=points,
+        slow_drift=_detect_slow_drift(points, threshold),
+        flip_flopping_cases=flipping,
+        undated=_undated(snapshots),
+    )
