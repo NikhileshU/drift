@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from getdrift.diffing import DEFAULT_THRESHOLD, DuplicateCaseIdError, case_index, compare
+from getdrift.diffing import (
+    BUCKET_ORDER,
+    DEFAULT_THRESHOLD,
+    ENVIRONMENT_MISMATCH,
+    DuplicateCaseIdError,
+    case_index,
+    compare,
+    filter_environment,
+)
 
 DEMO = Path(__file__).resolve().parent.parent / "examples" / "demo"
 
@@ -164,3 +172,66 @@ def test_no_duplicates_is_unaffected():
     cases = [_case("a", 0.5, True), _case("b", 0.6, True)]
     index = case_index(cases)
     assert set(index) == {"a", "b"}
+
+
+# --- P6-A4: same case_id, ONE valid instance per snapshot, different environments --
+#
+# Different problem from P6-A1's: both snapshots are individually valid (case_index
+# passes both), but the same case_id was scored in golden_set in one and
+# production_sample in the other. compare() matched them anyway and computed a
+# confident verdict comparing two things that were never comparable.
+
+
+def test_cross_environment_case_suppresses_the_verdict_instead_of_a_false_one():
+    """The exact bug, reproduced: golden_set 1.0 pass -> production_sample 0.2 fail
+    used to read as a confident Degraded. Verified live on main before this fix."""
+    before = {"cases": [_case("c", 1.0, True, "golden_set")]}
+    after = {"cases": [_case("c", 0.2, False, "production_sample")]}
+    diffs, _ = compare(before, after)
+    assert diffs[0].bucket == ENVIRONMENT_MISMATCH
+    assert diffs[0].bucket not in BUCKET_ORDER  # none of the six is asserted
+    assert diffs[0].score_before == pytest.approx(1.0)
+    assert diffs[0].score_after == pytest.approx(0.2)
+    assert diffs[0].delta == pytest.approx(-0.8)  # real numbers, not dropped
+    assert diffs[0].environment_before == "golden_set"
+    assert diffs[0].environment_after == "production_sample"
+
+
+def test_same_environment_comparison_is_unaffected():
+    """Regression pin — the most important one on this card: an ordinary same-
+    environment diff must compute exactly the verdict it always did."""
+    before = {"cases": [_case("c", 1.0, True, "golden_set")]}
+    after = {"cases": [_case("c", 0.2, False, "golden_set")]}
+    diffs, _ = compare(before, after)
+    assert diffs[0].bucket == "Regressed"
+    assert diffs[0].delta == pytest.approx(-0.8)
+
+
+def test_filter_environment_narrows_cases_and_preserves_other_fields():
+    results = {
+        "schema_version": "1.1.0",
+        "cases": [
+            _case("a", 0.5, True, "golden_set"),
+            _case("b", 0.5, True, "production_sample"),
+        ],
+    }
+    filtered = filter_environment(results, "golden_set")
+    assert [c["case_id"] for c in filtered["cases"]] == ["a"]
+    assert filtered["schema_version"] == "1.1.0"
+
+
+def test_filter_environment_none_is_a_no_op():
+    results = {"cases": [_case("a", 0.5, True, "golden_set")]}
+    assert filter_environment(results, None) is results
+
+
+def test_filter_environment_before_matching_removes_the_collision():
+    """Applying the filter to both sides upstream of compare() is how `--environment`
+    actually resolves the bug — not a new suppression path, a narrower input."""
+    before = {"cases": [_case("c", 1.0, True, "golden_set")]}
+    after = {"cases": [_case("c", 0.2, False, "production_sample")]}
+    diffs, removed = compare(
+        filter_environment(before, "golden_set"), filter_environment(after, "golden_set")
+    )
+    assert diffs == []  # nothing on the golden_set side of `after` to match
+    assert removed == ["c"]  # c was golden_set in before, absent from the filtered after

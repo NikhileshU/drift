@@ -260,3 +260,62 @@ def test_a_new_failing_case_is_not_smuggled_past_the_gate(git_repo):
     assert "New (1)" in result.output
     assert "brand_new_and_broken" in result.output
     assert result.exit_code == 0, result.output
+
+
+# --- P6-A4: same case_id, different environment, across the two snapshots ---------
+
+
+def _single_case(case_id, environment, score, passed):
+    return {
+        "schema_version": "1.1.0",
+        "cases": [{
+            "case_id": case_id,
+            "metric_scores": {"answer_correctness": score},
+            "pass": passed,
+            "environment": environment,
+            "timestamp": "2026-09-01T09:00:00Z",
+        }],
+    }
+
+
+def test_cross_environment_collision_is_suppressed_not_a_hard_fail(git_repo):
+    """A per-case suppression, not a whole-build FAIL the way a judge mismatch is:
+    the one uncomparable case is reported and excluded from the gate's blocking
+    buckets, rather than reading as a Regressed/Degraded that fails the build, and
+    rather than a bare PASS that hides it either."""
+    baseline = _single_case("c", "golden_set", 1.0, True)
+    candidate = _single_case("c", "production_sample", 0.2, False)
+    first, second = _pair(git_repo, candidate, baseline=baseline)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 0, result.output
+    assert "PASS" in result.output
+    assert "SUPPRESSED:" in result.output
+    assert "golden_set" in result.output and "production_sample" in result.output
+
+
+def test_environment_flag_on_the_gate_narrows_before_matching(git_repo):
+    baseline = {
+        "schema_version": "1.1.0",
+        "cases": [
+            {"case_id": "c", "metric_scores": {"answer_correctness": 1.0}, "pass": True,
+             "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+            {"case_id": "stable", "metric_scores": {"answer_correctness": 0.5}, "pass": True,
+             "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+        ],
+    }
+    candidate = {
+        "schema_version": "1.1.0",
+        "cases": [
+            {"case_id": "c", "metric_scores": {"answer_correctness": 0.2}, "pass": False,
+             "environment": "production_sample", "timestamp": "2026-09-01T09:00:00Z"},
+            {"case_id": "stable", "metric_scores": {"answer_correctness": 0.5}, "pass": True,
+             "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+        ],
+    }
+    first, second = _pair(git_repo, candidate, baseline=baseline)
+    result = runner.invoke(
+        app, ["ci", "--baseline", first, "--current", second, "--environment", "golden_set"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "SUPPRESSED:" not in result.output
+    assert "PASS" in result.output

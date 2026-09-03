@@ -15,6 +15,7 @@ from rich.console import Console
 from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.commands.diff_cmd import (
     _buckets,
+    _environment_mismatch_note,
     _filtered_note,
     _removed_note,
     _noise_sigma,
@@ -22,7 +23,14 @@ from getdrift.commands.diff_cmd import (
     _threshold,
     _uncomparable,
 )
-from getdrift.diffing import UNKNOWN, DuplicateCaseIdError, compare, judge_comparability
+from getdrift.diffing import (
+    UNKNOWN,
+    DuplicateCaseIdError,
+    Environment,
+    compare,
+    filter_environment,
+    judge_comparability,
+)
 from getdrift.gitutil import GitError, commits_on, has_uncommitted_changes, head_hash
 from getdrift.paths import drift_dir, read_config
 from getdrift.snapshot import SnapshotError, load_snapshot
@@ -97,6 +105,13 @@ def ci(
     noise_sigma: Optional[float] = typer.Option(
         None, "--noise-sigma", help="Combined stddevs a change must clear to count."
     ),
+    environment: Optional[Environment] = typer.Option(
+        None,
+        "--environment",
+        help="Gate on only cases from this environment, applied to both snapshots "
+        "before matching by case_id. See `drift diff --help` for what happens "
+        "without it.",
+    ),
 ) -> None:
     """Compare two snapshots and exit non-zero if the gate fails. For CI."""
     try:
@@ -129,9 +144,13 @@ def ci(
 
     resolved_threshold = _threshold(drift, threshold)
     resolved_sigma = _noise_sigma(drift, noise_sigma)
+    resolved_env = environment.value if environment is not None else None
     try:
         diffs, removed = compare(
-            before.results, after.results, resolved_threshold, resolved_sigma
+            filter_environment(before.results, resolved_env),
+            filter_environment(after.results, resolved_env),
+            resolved_threshold,
+            resolved_sigma,
         )
     except DuplicateCaseIdError as exc:
         fail(exc)
@@ -172,6 +191,7 @@ def ci(
         )
     _buckets(console, diffs)
     _filtered_note(console, diffs)
+    _environment_mismatch_note(console, diffs)
     _removed_note(console, removed, before.path.name, after.path.name)
 
     blocking = BLOCKING[fail_on]

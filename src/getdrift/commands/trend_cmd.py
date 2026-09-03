@@ -9,6 +9,7 @@ Rendering only. Every number here comes from `getdrift.trend`, which in turn buc
 through the same `compare()` that `drift diff` uses.
 """
 
+import dataclasses
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,8 +18,14 @@ from rich.console import Console
 from rich.table import Table
 
 from getdrift.commands import fail, warn_if_schemas_stale
-from getdrift.commands.diff_cmd import BUCKET_STYLE
-from getdrift.diffing import DEFAULT_NOISE_SIGMA, DEFAULT_THRESHOLD
+from getdrift.commands.diff_cmd import BUCKET_STYLE, SUPPRESSED_MARKER
+from getdrift.diffing import (
+    DEFAULT_NOISE_SIGMA,
+    DEFAULT_THRESHOLD,
+    ENVIRONMENT_MISMATCH,
+    Environment,
+    filter_environment,
+)
 from getdrift.gitutil import GitError
 from getdrift.paths import drift_dir
 from getdrift.trend import TrendPoint, case_trend, load_history, metric_trend
@@ -77,12 +84,14 @@ def _table(points: List[TrendPoint], show_pass: bool) -> Table:
         ]
         if show_pass:
             row.append("pass" if point.passed else "FAIL")
-        row += [
-            "—" if delta is None else f"{delta:+.3f}",
-            f"[{BUCKET_STYLE[bucket]}]{bucket}[/{BUCKET_STYLE[bucket]}]"
+        cell = (
+            "[yellow]no verdict[/yellow]"
+            if bucket == ENVIRONMENT_MISMATCH
+            else f"[{BUCKET_STYLE[bucket]}]{bucket}[/{BUCKET_STYLE[bucket]}]"
             if bucket in BUCKET_STYLE
-            else bucket,
-        ]
+            else bucket
+        )
+        row += ["—" if delta is None else f"{delta:+.3f}", cell]
         table.add_row(*row)
         previous = point.score
     return table
@@ -119,6 +128,17 @@ def _flags(console: Console, trend) -> None:
         )
     if drift is None and flip is None and not unstable:
         console.print("[dim]No slow drift or flip-flopping detected.[/dim]")
+    mismatched = [p for p in getattr(trend, "points", []) if p.bucket == ENVIRONMENT_MISMATCH]
+    if mismatched:
+        # The table already shows "no verdict" at these rows — this is the line that
+        # says why, since a narrow table column is not where a reader looks for a
+        # reason. Same marker as `drift diff`/`drift ci`: `--environment` fixes it.
+        console.print(
+            f"[{FLAG_STYLE}]{SUPPRESSED_MARKER} {len(mismatched)} step(s) compared "
+            f"cases scored under different environments; no verdict at those steps: "
+            f"{', '.join(p.commit_hash[:12] for p in mismatched)}. Pass --environment "
+            f"<golden_set|production_sample> to compare only one.[/{FLAG_STYLE}]"
+        )
 
 
 def trend(
@@ -144,6 +164,13 @@ def trend(
         help=f"Combined standard deviations a change must clear. Defaults to "
         f"`noise_sigma` in .drift/config.yaml, else {DEFAULT_NOISE_SIGMA}.",
     ),
+    environment: Optional[Environment] = typer.Option(
+        None,
+        "--environment",
+        help="Chart only cases from this environment, applied to every snapshot in "
+        "the history before it is walked. See `drift diff --help` for what happens "
+        "without it, applied here one step at a time instead of once.",
+    ),
 ) -> None:
     """Chart one case (or one metric) across every snapshot in the repo."""
     if (case_id is None) == (metric is None):
@@ -165,6 +192,16 @@ def trend(
     history = load_history(drift)
     if not history:
         fail("no snapshots in .drift/snapshots/ — run `drift snapshot` first")
+    if environment is not None:
+        # Filtered per snapshot, before case_trend/metric_trend ever walk the
+        # history — the same "before matching by case_id" rule `drift diff` and
+        # `drift ci` apply, just one snapshot at a time instead of one pair.
+        history = [
+            dataclasses.replace(
+                snapshot, results=filter_environment(snapshot.results, environment.value)
+            )
+            for snapshot in history
+        ]
     if len(history) < 2:
         fail(
             f"only one snapshot exists ({history[0].commit_hash[:12]}). A trend needs a "

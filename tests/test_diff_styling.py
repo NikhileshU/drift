@@ -20,10 +20,11 @@ from getdrift.commands.diff_cmd import (
     BUCKET_STYLE,
     REMOVED_MARKER,
     SUPPRESSED_MARKER,
+    _environment_mismatch_note,
     _filtered_note,
     _removed_note,
 )
-from getdrift.diffing import CaseDiff
+from getdrift.diffing import ENVIRONMENT_MISMATCH, CaseDiff
 
 YELLOW, DIM = "\x1b[33m", "\x1b[2m"
 
@@ -50,6 +51,21 @@ def _diff(case_id, **flags):
     )
 
 
+def _env_mismatch_diff(case_id):
+    return CaseDiff(
+        case_id=case_id,
+        bucket=ENVIRONMENT_MISMATCH,
+        pass_before=True,
+        pass_after=False,
+        score_before=1.0,
+        score_after=0.2,
+        delta=-0.8,
+        shared_metrics=["accuracy"],
+        environment_before="golden_set",
+        environment_after="production_sample",
+    )
+
+
 def test_dim_really_is_the_nothing_happened_colour():
     """The premise the other tests rest on. If this changes, revisit them."""
     assert BUCKET_STYLE["Unchanged"] == "dim"
@@ -65,6 +81,15 @@ def test_dim_really_is_the_nothing_happened_colour():
 def test_suppressed_case_notes_are_yellow_not_dim(forced_color, flag, fragment):
     output = _render(lambda c: _filtered_note(c, [_diff("c", **{flag: True})]))
     assert fragment in output
+    assert YELLOW in output
+    assert DIM not in output
+
+
+def test_environment_mismatch_note_is_yellow_not_dim(forced_color):
+    """P6-A4: a case with no verdict must read the same way as the other two
+    withheld-case notes — this one just has no bucket table to hide inside."""
+    output = _render(lambda c: _environment_mismatch_note(c, [_env_mismatch_diff("c")]))
+    assert "golden_set" in output and "production_sample" in output
     assert YELLOW in output
     assert DIM not in output
 
@@ -136,6 +161,13 @@ def test_removed_note_carries_a_marker_without_colour():
     assert "\x1b[" not in output
     assert "REMOVED:" in output
     assert "lost-case" in output
+
+
+def test_environment_mismatch_note_carries_a_marker_without_colour():
+    output = _plain(lambda c: _environment_mismatch_note(c, [_env_mismatch_diff("c")]))
+    assert "\x1b[" not in output
+    assert "SUPPRESSED:" in output
+    assert "golden_set" in output and "production_sample" in output
 
 
 def test_the_markers_are_plain_ascii_and_greppable():

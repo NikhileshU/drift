@@ -12,11 +12,14 @@ from getdrift.diffing import (
     BUCKET_ORDER,
     DEFAULT_NOISE_SIGMA,
     DEFAULT_THRESHOLD,
+    ENVIRONMENT_MISMATCH,
     UNKNOWN,
     CaseDiff,
     Comparability,
     DuplicateCaseIdError,
+    Environment,
     compare,
+    filter_environment,
     judge_comparability,
 )
 from getdrift.gitutil import GitError
@@ -207,6 +210,33 @@ def _uncomparable(
     )
 
 
+def _environment_mismatch_note(console: Console, diffs: List[CaseDiff]) -> None:
+    """Say which cases were compared across two different `environment`s, and why no
+    verdict is shown for them.
+
+    Each such case is still in `diffs` with `bucket == ENVIRONMENT_MISMATCH`;
+    `_buckets` already skips it, since that value is not one of the six in
+    BUCKET_ORDER — without this note it would just vanish from the report, the same
+    way a removed case would without `_removed_note`. Reuses `_flat` for the raw
+    numbers, exactly as `_uncomparable` does for a judge-version mismatch, and the
+    same `SUPPRESSED:` marker convention as `_filtered_note`: plain ASCII, survives
+    colour stripping in CI, greppable.
+    """
+    mismatched = [c for c in diffs if c.bucket == ENVIRONMENT_MISMATCH]
+    if not mismatched:
+        return
+    _flat(console, mismatched)
+    names = ", ".join(
+        f"{c.case_id} ({c.environment_before} vs {c.environment_after})"
+        for c in sorted(mismatched, key=lambda c: c.case_id)
+    )
+    console.print(
+        f"[yellow]{SUPPRESSED_MARKER} {len(mismatched)} case(s) compared across "
+        f"different environments, no verdict shown: {names}. Pass --environment "
+        "<golden_set|production_sample> to compare only one.[/yellow]"
+    )
+
+
 def _most_recent(drift: Path, count: int) -> List[Snapshot]:
     """The `count` newest snapshots, oldest first, or fail with a clear reason.
 
@@ -249,6 +279,15 @@ def diff(
         f"else {DEFAULT_NOISE_SIGMA}. Pass 0 to disable the noise filter and bucket on "
         f"the raw threshold alone.",
     ),
+    environment: Optional[Environment] = typer.Option(
+        None,
+        "--environment",
+        help="Compare only cases from this environment, applied to both snapshots "
+        "before matching by case_id. Without it, a case_id scored under one "
+        "environment in one snapshot and the other environment in the other still "
+        "gets matched, but its verdict is suppressed rather than shown as a false "
+        "regression or improvement.",
+    ),
 ) -> None:
     """Diff two snapshots into Fixed/Regressed/Improved/Degraded/Unchanged/New.
 
@@ -276,9 +315,13 @@ def diff(
 
     resolved_threshold = _threshold(drift, threshold)
     resolved_sigma = _noise_sigma(drift, noise_sigma)
+    resolved_env = environment.value if environment is not None else None
     try:
         diffs, removed = compare(
-            before.results, after.results, resolved_threshold, resolved_sigma
+            filter_environment(before.results, resolved_env),
+            filter_environment(after.results, resolved_env),
+            resolved_threshold,
+            resolved_sigma,
         )
     except DuplicateCaseIdError as exc:
         fail(exc)
@@ -304,6 +347,7 @@ def diff(
             )
         _buckets(console, diffs)
         _filtered_note(console, diffs)
+        _environment_mismatch_note(console, diffs)
 
     if removed:
         # Yellow, on a narrower argument than "removals matter". A suppressed case is
