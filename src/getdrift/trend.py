@@ -330,16 +330,15 @@ def metric_trend(
     snapshots = list(history) if history is not None else load_history(drift)
     points, case_ids = [], set()
     for snapshot in snapshots:
+        # Through case_index rather than a direct scan of `cases`, same as
+        # `_case_of` — a duplicate case_id here used to silently score twice
+        # (once under each copy) and skew the average, instead of the case_id
+        # collision it actually is.
+        cases = case_index(snapshot.results.get("cases", [])).values()
         scoring = [
-            case_stats(case, [metric]).mean
-            for case in snapshot.results.get("cases", [])
-            if metric in case["metric_scores"]
+            case_stats(case, [metric]).mean for case in cases if metric in case["metric_scores"]
         ]
-        case_ids.update(
-            case["case_id"]
-            for case in snapshot.results.get("cases", [])
-            if metric in case["metric_scores"]
-        )
+        case_ids.update(case["case_id"] for case in cases if metric in case["metric_scores"])
         present = [value for value in scoring if value is not None]
         points.append(
             TrendPoint(
