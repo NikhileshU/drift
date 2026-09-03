@@ -274,49 +274,81 @@ def _names(cases: List[CaseDiff]) -> str:
     return ", ".join(sorted(c.case_id for c in cases))
 
 
-def _auto_diff_lines(diffs: List[CaseDiff], comparability: Comparability) -> List[str]:
+#: A boxed block, not six `Drift: `-prefixed repetitions: the header alone carries the
+#: "this is Drift" context, so the reader scans an aligned block instead of the same
+#: six-character prefix six times. Width is cosmetic, not a contract — nothing parses
+#: it — chosen only to roughly match the spec's own quoted example.
+_BLOCK_WIDTH = 40
+_HEADER = ("── Drift " + "─" * _BLOCK_WIDTH)[:_BLOCK_WIDTH]
+_FOOTER = "─" * _BLOCK_WIDTH
+#: Longest bucket name ("Regressed"/"Unchanged") plus one column of breathing room,
+#: so every count lines up under the next regardless of which bucket it belongs to.
+_LABEL_WIDTH = max(len(b) for b in BUCKET_ORDER) + 1
+
+
+def _bucket_line(bucket: str, cases: List[CaseDiff]) -> str:
+    line = f"  {bucket.ljust(_LABEL_WIDTH)}{len(cases)}"
+    if bucket in NAMED_BUCKETS and cases:
+        line += f": {_names(cases)}"
+    return line
+
+
+def _auto_diff_lines(
+    diffs: List[CaseDiff], comparability: Comparability, baseline_hash: str
+) -> List[str]:
     """The compact terminal block, as plain lines — no colour, this is pytest output.
 
-    Mirrors `drift diff`'s own MISMATCH/UNKNOWN wording verbatim (the spec's
-    instruction): a team should not learn two different sentences for the same fact
-    depending on whether they read it here or ran `drift diff` by hand.
+    Opens with the baseline it compared against: a verdict is meaningless without
+    knowing what it is a verdict against, and unlike `drift diff` (baseline and
+    candidate both named on the command line) this path never shows it anywhere else
+    the reader is looking. Mirrors `drift diff`'s own MISMATCH/UNKNOWN wording
+    verbatim (the spec's instruction): a team should not learn two different
+    sentences for the same fact depending on whether they read it here or ran
+    `drift diff` by hand.
     """
+    lines = [_HEADER, f"  vs {baseline_hash[:8]} (previous run, same branch)", ""]
+
     if comparability.suppresses_verdicts:
         fresh = [c for c in diffs if c.bucket == "New"]
-        lines = [
-            f"Drift: not directly comparable — {comparability.detail}.",
-            "Drift: Fixed / Regressed / Improved / Degraded / Unchanged are "
-            "suppressed: a verdict on these deltas would be about the rubric, not "
-            "the model.",
-            f"Drift: New {len(fresh)}" + (f": {_names(fresh)}" if fresh else ""),
+        lines += [
+            f"  Not directly comparable — {comparability.detail}.",
+            "  Fixed / Regressed / Improved / Degraded / Unchanged are suppressed: "
+            "a verdict on these deltas would be about the rubric, not the model.",
+            "",
+            _bucket_line("New", fresh),
+            _FOOTER,
         ]
         return lines
 
-    lines = []
     if comparability.state == UNKNOWN:
         lines.append(
-            f"Drift: warning: {comparability.detail}. The verdicts below are "
-            "unverified — pass --judge-version to `drift snapshot` so Drift can "
-            "check them."
+            f"  warning: {comparability.detail}. The verdicts below are unverified "
+            "— pass --judge-version to `drift snapshot` so Drift can check them."
         )
+        lines.append("")
+
     for bucket in BUCKET_ORDER:
         cases = [c for c in diffs if c.bucket == bucket]
-        if bucket in NAMED_BUCKETS and cases:
-            lines.append(f"Drift: {bucket} {len(cases)}: {_names(cases)}")
-        else:
-            lines.append(f"Drift: {bucket} {len(cases)}")
+        lines.append(_bucket_line(bucket, cases))
 
     noisy = [c for c in diffs if c.noise_filtered]
     flips = [c for c in diffs if c.pass_flip_filtered]
-    for cases, reason in (
-        (noisy, "moved past the threshold but stayed inside the noise floor"),
-        (flips, "had a pass flip that did not survive the majority across runs"),
-    ):
-        if cases:
+    suppressed = [
+        (cases, reason)
+        for cases, reason in (
+            (noisy, "moved past the threshold but stayed inside the noise floor"),
+            (flips, "had a pass flip that did not survive the majority across runs"),
+        )
+        if cases
+    ]
+    if suppressed:
+        lines.append("")
+        for cases, reason in suppressed:
             lines.append(
-                f"Drift: {SUPPRESSED_MARKER} {len(cases)} case(s) {reason}: "
-                f"{_names(cases)}"
+                f"  {SUPPRESSED_MARKER} {len(cases)} case(s) {reason}: {_names(cases)}"
             )
+
+    lines.append(_FOOTER)
     return lines
 
 
@@ -413,7 +445,7 @@ def _auto_diff(reporter, drift: Path, snapshot: Snapshot) -> None:
         # compare()'s own removed list — not recomputed, per god's ruling.
         diffs, removed = compare(before.results, snapshot.results)
         comparability = judge_comparability(before.manifest, snapshot.manifest)
-        lines = _auto_diff_lines(diffs, comparability)
+        lines = _auto_diff_lines(diffs, comparability, baseline_hash)
         if _auto_export_enabled(drift):
             created_at = _iso(datetime.now(timezone.utc).timestamp())
             _write_reports(
