@@ -23,3 +23,4 @@ roster.json
 roster-backups/
 hallways.json
 tunnels.json
+.coverage
