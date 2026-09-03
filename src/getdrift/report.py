@@ -17,6 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from getdrift.commands.diff_cmd import REMOVED_MARKER
 from getdrift.diffing import BUCKET_ORDER, ENVIRONMENT_MISMATCH, CaseDiff, Comparability
 from getdrift.paths import drift_dir
 
@@ -83,6 +84,7 @@ def render_json(
     baseline_hash: str,
     candidate_hash: str,
     created_at: str,
+    removed: Sequence[str] = (),
 ) -> str:
     """The report as a JSON string (trailing newline, 2-space indent).
 
@@ -91,7 +93,9 @@ def render_json(
     those cases silently here would be the same loss `_environment_mismatch_note`
     exists to prevent in the CLI. Included regardless of `comparability` — this is
     the full data, not a decision about what a human should be shown; that decision
-    is `render_markdown`'s to make.
+    is `render_markdown`'s to make. `removed` (case_ids in `before`, gone from
+    `after` — `compare()`'s second return value) gets the same treatment: a report
+    that cannot express a removed case would silently drop it, same failure family.
     """
     mismatched = [c for c in diffs if c.bucket == ENVIRONMENT_MISMATCH]
     document = {
@@ -101,6 +105,7 @@ def render_json(
         "comparability": asdict(comparability),
         "buckets": _bucket_lists(diffs),
         "environment_mismatches": [asdict(c) for c in mismatched],
+        "removed": sorted(removed),
     }
     return json.dumps(document, indent=2) + "\n"
 
@@ -125,16 +130,38 @@ def _bullet(case: CaseDiff) -> str:
     return f"- `{case.case_id}`: {_case_detail(case)}"
 
 
+def _removed_section(removed: Sequence[str], baseline_hash: str, candidate_hash: str) -> List[str]:
+    """`## Removed` — present only when `removed` is non-empty; an empty sequence adds
+    no section at all, per spec. Reuses `_removed_note`'s own sentence, `REMOVED_MARKER`
+    included, rather than inventing new wording for the same fact: two implementations
+    of "these cases are gone" is how they eventually disagree (see `case_stats`'s
+    docstring for the same reasoning applied to scores instead of prose).
+    """
+    if not removed:
+        return []
+    names = ", ".join(f"`{case_id}`" for case_id in sorted(removed))
+    return [
+        f"## Removed ({len(removed)})\n",
+        f"{REMOVED_MARKER} {len(removed)} case(s) present in `{baseline_hash[:12]}` "
+        f"and gone from `{candidate_hash[:12]}`: {names}",
+        "",
+    ]
+
+
 def render_markdown(
     diffs: List[CaseDiff],
     comparability: Comparability,
     baseline_hash: str,
     candidate_hash: str,
     created_at: str,
+    removed: Sequence[str] = (),
 ) -> str:
     """The report as Markdown, meant to be pasted straight into a PR comment or Slack.
 
-    Hashes live in the header only, per spec — no metadata clutter in the body.
+    Hashes live in the header only, per spec — no metadata clutter in the body. The
+    `Removed` section is the one exception: it names both hashes again, because
+    `_removed_note`'s own sentence does and reusing that sentence verbatim (see
+    `_removed_section`) was the point.
 
     When `comparability.suppresses_verdicts` (a known judge-version change), this
     withholds the same six labels `drift diff`'s `_uncomparable()` withholds and shows
@@ -143,6 +170,8 @@ def render_markdown(
     context — more likely than an interactive terminal to have that claim taken at
     face value with the caveat unread. `New` cases still get their own section: they
     do not depend on which judge scored them, only on whether they existed before.
+    Removed cases don't depend on the judge either — a case's absence isn't a score —
+    so that section renders the same way regardless of `comparability`.
     """
     header = f"# Drift report: `{baseline_hash[:12]}` → `{candidate_hash[:12]}`\n"
     lines = [header]
@@ -164,6 +193,7 @@ def render_markdown(
             lines.append(f"## New ({len(fresh)})\n")
             lines.extend(_bullet(c) for c in sorted(fresh, key=lambda c: c.case_id))
             lines.append("")
+        lines.extend(_removed_section(removed, baseline_hash, candidate_hash))
         return "\n".join(lines).rstrip() + "\n"
 
     buckets = _group_by_bucket(diffs)
@@ -190,6 +220,7 @@ def render_markdown(
         )
         lines.append("")
 
+    lines.extend(_removed_section(removed, baseline_hash, candidate_hash))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -205,10 +236,15 @@ def write_reports(
     baseline_hash: str,
     candidate_hash: str,
     created_at: str,
+    removed: Sequence[str] = (),
     drift: Optional[Path] = None,
     formats: Sequence[str] = ("json", "md"),
 ) -> List[Path]:
     """Render and write each format in `formats` to `.drift/reports/`.
+
+    `removed` is `compare()`'s second return value: case_ids present in the baseline
+    and gone from the candidate. Passed through to both renderers; see `render_json`
+    and `_removed_section` for why it exists at all.
 
     Two files per format: `latest.<ext>`, always overwritten — the thing to open right
     now — and an archived `<timestamp>_<hash>.<ext>`, never overwritten. Snapshots
@@ -232,7 +268,7 @@ def write_reports(
     written: List[Path] = []
     for fmt in formats:
         render, ext = _RENDERERS[fmt]
-        content = render(diffs, comparability, baseline_hash, candidate_hash, created_at)
+        content = render(diffs, comparability, baseline_hash, candidate_hash, created_at, removed)
 
         latest = reports_dir / f"latest.{ext}"
         latest.write_text(content, encoding="utf-8")

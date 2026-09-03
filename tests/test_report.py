@@ -141,6 +141,64 @@ def test_markdown_environment_mismatch_case_gets_its_own_section_and_is_not_lost
     assert "golden_set vs production_sample" in md
 
 
+def test_markdown_removed_case_appears_in_a_removed_section():
+    md = render_markdown([], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT,
+                          removed=["legacy_fax_number_lookup"])
+    assert "## Removed (1)" in md
+    assert "REMOVED:" in md
+    assert "legacy_fax_number_lookup" in md
+    assert BASELINE_HASH[:12] in md and CANDIDATE_HASH[:12] in md
+
+
+def test_markdown_empty_removed_adds_no_section():
+    with_none = render_markdown([], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT)
+    with_empty = render_markdown([], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, removed=())
+    assert "Removed" not in with_none
+    assert "REMOVED:" not in with_none
+    assert with_none == with_empty
+
+
+def test_markdown_removed_section_survives_a_judge_mismatch():
+    """Removed cases don't depend on the judge — a case's absence isn't a score."""
+    md = render_markdown([], MISMATCH, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT,
+                          removed=["gone_case"])
+    assert "## Removed (1)" in md
+    assert "gone_case" in md
+
+
+def test_json_report_carries_removed_case_ids():
+    document = json.loads(
+        render_json([], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT,
+                    removed=["b_case", "a_case"])
+    )
+    assert document["removed"] == ["a_case", "b_case"]
+
+
+def test_json_report_removed_defaults_to_empty():
+    document = json.loads(render_json([], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT))
+    assert document["removed"] == []
+
+
+def test_write_reports_removed_case_appears_in_both_formats(tmp_path):
+    drift = tmp_path / ".drift"
+    write_reports(
+        [], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT,
+        removed=["legacy_fax_number_lookup"], drift=drift,
+    )
+    reports = drift / "reports"
+    document = json.loads((reports / "latest.json").read_text())
+    assert document["removed"] == ["legacy_fax_number_lookup"]
+    md = (reports / "latest.md").read_text()
+    assert "legacy_fax_number_lookup" in md and "REMOVED:" in md
+
+
+def test_write_reports_empty_removed_adds_no_markdown_section(tmp_path):
+    drift = tmp_path / ".drift"
+    write_reports([], EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, drift=drift)
+    md = (drift / "reports" / "latest.md").read_text()
+    assert "Removed" not in md
+
+
 def test_markdown_body_has_no_hash_outside_the_header(demo_diffs):
     md = render_markdown(demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT)
     body = "\n".join(md.splitlines()[1:])
