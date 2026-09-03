@@ -280,6 +280,28 @@ def create_snapshot(
     return Snapshot(target, commit, document, manifest, dirty, warnings)
 
 
+def _contained_snapshot_dir(candidate: Path, snapshots: Path) -> Optional[Path]:
+    """`candidate` if it is a real, direct child of `snapshots` on disk — else None.
+
+    `ref` (hash prefix or git rev) can carry `..`, or start with `/` and override the
+    join entirely (pathlib's `/` treats a leading-`/` right-hand side as absolute and
+    drops everything to its left) — `snapshots / ref` happily walks anywhere on the
+    filesystem, and `is_dir()` alone doesn't notice: it only asks whether *something*
+    is there, not whether it's still under `snapshots`. Every real snapshot directory
+    is exactly one level under `snapshots` by construction (`create_snapshot` writes
+    `base / "snapshots" / commit`, never deeper) — resolving both sides and checking
+    that the real parent is `snapshots` is what actually enforces that, containment by
+    structure rather than by rejecting specific characters.
+    """
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if resolved.parent == snapshots.resolve() and resolved.is_dir():
+        return candidate
+    return None
+
+
 def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
     """Snapshot directory for a full commit hash, an unambiguous prefix, or a git ref.
 
@@ -299,6 +321,11 @@ def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
     own permanent identifier, while a ref name is mutable — the natural fallback, not
     the primary. Since both are always computed, that order only decides which
     candidate is named first in the ambiguity error.
+
+    `ref` is untrusted: it can come straight from a CLI arg, a CI config value, or an
+    env var. Every candidate below is run through `_contained_snapshot_dir` before
+    being treated as a match, so a `ref` like `".."` or `"../../../etc"` can never
+    resolve to anything outside `snapshots/` — see P8-D1.
     """
     base = drift if drift is not None else drift_dir()
     snapshots = base / "snapshots"
@@ -307,11 +334,18 @@ def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
             "no .drift/snapshots/ in this repo — run `drift init` first"
         )
 
-    exact = snapshots / ref
-    if exact.is_dir():
+    exact = _contained_snapshot_dir(snapshots / ref, snapshots)
+    if exact is not None:
         return exact
 
-    matches = sorted(p for p in snapshots.glob(f"{ref}*") if p.is_dir())
+    try:
+        # A `ref` starting with `/` makes this an absolute pattern, which glob()
+        # rejects outright — surfaced by the same untrusted-`ref` hardening above.
+        # Not a match, not a crash: fall through exactly as an empty glob would.
+        candidates = list(snapshots.glob(f"{ref}*"))
+    except (NotImplementedError, ValueError):
+        candidates = []
+    matches = sorted(p for p in candidates if _contained_snapshot_dir(p, snapshots))
     if len(matches) > 1:
         raise SnapshotNotFoundError(
             f"{ref!r} matches {len(matches)} snapshots: "
@@ -320,7 +354,9 @@ def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
     prefix_candidate = matches[0] if matches else None
 
     git_hash = resolve_ref(ref)
-    git_candidate = snapshots / git_hash if git_hash and (snapshots / git_hash).is_dir() else None
+    git_candidate = (
+        _contained_snapshot_dir(snapshots / git_hash, snapshots) if git_hash else None
+    )
 
     if prefix_candidate and git_candidate and prefix_candidate != git_candidate:
         raise SnapshotNotFoundError(

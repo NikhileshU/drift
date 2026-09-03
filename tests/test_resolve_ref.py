@@ -91,6 +91,53 @@ def test_hash_prefix_and_git_ref_naming_different_snapshots_is_ambiguous(git_rep
     assert second.commit_hash in message
 
 
+# --- P8-D1: `ref` is untrusted (a CLI arg, a CI config value, an env var) and must ---
+# never resolve outside `snapshots/`. Confirmed by god before assigning the review:
+# `resolve_snapshot("..")` and `resolve_snapshot("../snapshots")` returned real paths
+# outside `snapshots/`; only the third probe below "worked" by accident (no
+# results.json at the traversal target, not because of any containment check).
+
+
+def test_dotdot_does_not_escape_snapshots_dir(git_repo):
+    _init(git_repo)
+    create_snapshot(DEMO / "baseline.json")
+    with pytest.raises(SnapshotNotFoundError):
+        resolve_snapshot("..")
+
+
+def test_dotdot_snapshots_does_not_resolve_to_the_snapshots_dir_itself(git_repo):
+    _init(git_repo)
+    create_snapshot(DEMO / "baseline.json")
+    with pytest.raises(SnapshotNotFoundError):
+        resolve_snapshot("../snapshots")
+
+
+def test_traversal_to_a_real_directory_elsewhere_is_still_refused(git_repo, tmp_path):
+    """The case that must not hold 'by accident': plant a directory with a real
+    results.json outside snapshots/ and confirm traversal still can't reach it, not
+    just that it happens to 404 the way `../../../../etc/passwd` does."""
+    _init(git_repo)
+    create_snapshot(DEMO / "baseline.json")
+
+    bait = tmp_path / "bait"
+    bait.mkdir()
+    (bait / "results.json").write_text((DEMO / "baseline.json").read_text())
+
+    # `snapshots/` is `git_repo/.drift/snapshots`; walk up to tmp_path, then into bait.
+    up = "../" * len((git_repo / ".drift" / "snapshots").relative_to(tmp_path).parts)
+    with pytest.raises(SnapshotNotFoundError):
+        resolve_snapshot(f"{up}bait")
+
+
+def test_an_absolute_ref_is_refused_not_a_crash(git_repo):
+    """A leading `/` used to reach pathlib's glob() as an absolute pattern and raise
+    NotImplementedError instead of a normal SnapshotNotFoundError."""
+    _init(git_repo)
+    create_snapshot(DEMO / "baseline.json")
+    with pytest.raises(SnapshotNotFoundError):
+        resolve_snapshot("/etc")
+
+
 def test_unknown_ref_keeps_the_original_wording(git_repo):
     """P5-D2: points at `drift log`, not `ls .drift/snapshots` — the command now exists."""
     _init(git_repo)
