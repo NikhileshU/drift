@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from getdrift import __version__
-from getdrift.gitutil import has_uncommitted_changes, head_hash, resolve_ref
+from getdrift.gitutil import GitError, commits_on, has_uncommitted_changes, head_hash, resolve_ref
 from getdrift.paths import drift_dir, read_config
 from getdrift.schema import (
     PLACEHOLDER,
@@ -343,6 +343,36 @@ def resolve_snapshot(ref: str, drift: Optional[Path] = None) -> Path:
     raise SnapshotNotFoundError(
         f"no snapshot for {ref!r}. `drift log` to see what exists."
     )
+
+
+def nearest_ancestor_snapshot(
+    commit: Optional[str] = None, drift: Optional[Path] = None
+) -> Optional[str]:
+    """Commit hash of the nearest snapshot in `commit`'s own history (default HEAD).
+
+    Walks `commits_on(commit)` — that commit's own ancestry via `git rev-list`, newest
+    first, never `--all` — the same primitive `ci_cmd._default_baseline` already
+    relies on for the same guarantee: a snapshot that exists only on a sibling branch
+    is never mistaken for a baseline of this one, because it is never in this list at
+    all. `commit` itself is skipped (index 0 of that list) — a snapshot is never its
+    own baseline.
+
+    Returns None rather than raising when there is no prior snapshot, when nothing in
+    the ancestry has one, or when git can't answer at all (no repo, no commits, a
+    shallow clone truncating history). One caller is a pytest plugin running inside
+    someone else's test suite — "no baseline found" must never become a broken run.
+    """
+    base = drift if drift is not None else drift_dir()
+    try:
+        start = commit if commit is not None else head_hash()
+        history = commits_on(start)
+    except GitError:
+        return None
+    snapshots = base / "snapshots"
+    for candidate in history[1:]:  # [0] is `start` itself
+        if (snapshots / candidate).is_dir():
+            return candidate
+    return None
 
 
 def load_snapshot(ref: str, drift: Optional[Path] = None) -> Snapshot:
