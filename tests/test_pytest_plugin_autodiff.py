@@ -22,10 +22,12 @@ import pytest
 
 from getdrift.diffing import CaseDiff, Comparability
 from getdrift.pytest_plugin import (
+    DEFAULT_EXPORT_FORMATS,
     _auto_diff_enabled,
     _auto_diff_lines,
     _auto_export_enabled,
     _config_bool,
+    _resolved_export_formats,
 )
 
 
@@ -50,6 +52,64 @@ def test_config_auto_diff_quoted_false_string_also_disables_it(tmp_path, monkeyp
     monkeypatch.delenv("DRIFT_AUTO_DIFF", raising=False)
     (tmp_path / "config.yaml").write_text('auto_diff: "false"\n')
     assert _auto_diff_enabled(None, tmp_path) is False
+
+
+# --- pure unit tests: export_formats -------------------------------------------
+#
+# P8-X2: `export_formats` was documented in the original spec and read nowhere at
+# all — `write_reports` always got its own hardcoded default regardless of
+# config.yaml. Same defect class P8-A1 fixed for `auto_export: "false"`, one config
+# key up: something written down as a real setting that silently did nothing.
+
+
+def test_export_formats_defaults_when_absent_from_config(tmp_path):
+    formats, warning = _resolved_export_formats(tmp_path)
+    assert formats == DEFAULT_EXPORT_FORMATS
+    assert warning is None
+
+
+def test_export_formats_reads_a_real_list(tmp_path):
+    (tmp_path / "config.yaml").write_text("export_formats: [json]\n")
+    formats, warning = _resolved_export_formats(tmp_path)
+    assert formats == ("json",)
+    assert warning is None
+
+
+def test_export_formats_accepts_a_bare_string_no_warning(tmp_path):
+    """The brief's own example of a shape a user reaches for first — accepted
+    outright, not merely tolerated with a warning: there is nothing ambiguous about
+    `export_formats: json`."""
+    (tmp_path / "config.yaml").write_text("export_formats: json\n")
+    formats, warning = _resolved_export_formats(tmp_path)
+    assert formats == ("json",)
+    assert warning is None
+
+
+def test_export_formats_drops_an_unrecognised_entry_and_warns(tmp_path):
+    """The brief's other example: `export_formats: [json, csv]` — 'csv' is dropped,
+    'json' still gets written, and the caller is told why rather than left guessing."""
+    (tmp_path / "config.yaml").write_text("export_formats: [json, csv]\n")
+    formats, warning = _resolved_export_formats(tmp_path)
+    assert formats == ("json",)
+    assert warning is not None
+    assert "csv" in warning and "json" in warning
+
+
+def test_export_formats_falls_back_when_nothing_is_usable(tmp_path):
+    (tmp_path / "config.yaml").write_text("export_formats: [csv, pdf]\n")
+    formats, warning = _resolved_export_formats(tmp_path)
+    assert formats == DEFAULT_EXPORT_FORMATS
+    assert warning is not None
+
+
+def test_export_formats_falls_back_on_the_wrong_shape_entirely(tmp_path):
+    """Never an unhandled crash inside someone else's pytest run — the brief's own
+    requirement, tested against the shape furthest from what was asked for."""
+    (tmp_path / "config.yaml").write_text("export_formats: {json: true}\n")
+    formats, warning = _resolved_export_formats(tmp_path)
+    assert formats == DEFAULT_EXPORT_FORMATS
+    assert warning is not None
+    assert "not a string or a list" in warning
 
 
 def test_env_zero_disables_even_when_config_says_true(tmp_path, monkeypatch):
@@ -420,3 +480,37 @@ plugin._write_reports = _explode
     assert result.returncode == 1  # the suite's own failure, untouched
     assert "── Drift" not in result.stdout
     assert "Traceback" not in result.stdout
+
+
+def test_export_formats_config_reaches_write_reports_end_to_end(eval_repo):
+    """P8-X2: before this, `export_formats` was read nowhere — `write_reports`
+    always got its own hardcoded default no matter what config.yaml said."""
+    commit1 = _head(eval_repo)
+    _run_pytest(eval_repo, env={"TEST_BASELINE_HASH": ""})
+
+    (eval_repo / ".drift" / "config.yaml").write_text("export_formats: [json]\n")
+    (eval_repo / "tests" / "test_evals.py").write_text(REGRESSING_SUITE_2)
+    _commit(eval_repo, "now failing")
+    (eval_repo / "conftest.py").write_text('''
+import json
+import os
+import getdrift.pytest_plugin as plugin
+
+def _fake_resolve(drift, exclude):
+    return os.environ.get("TEST_BASELINE_HASH")
+
+def _record(*args, **kwargs):
+    with open(os.environ["CAPTURE_FILE"], "w") as f:
+        json.dump(list(kwargs.get("formats", [])), f)
+
+plugin._resolve_baseline = _fake_resolve
+plugin._write_reports = _record
+''')
+    capture_file = eval_repo / "capture.json"
+    result = _run_pytest(
+        eval_repo,
+        env={"TEST_BASELINE_HASH": commit1, "CAPTURE_FILE": str(capture_file)},
+    )
+
+    assert result.returncode == 1
+    assert json.loads(capture_file.read_text()) == ["json"]

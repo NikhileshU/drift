@@ -14,7 +14,7 @@ import os
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from getdrift.diffing import (
     BUCKET_ORDER,
@@ -404,6 +404,65 @@ def _auto_export_enabled(drift: Path) -> bool:
     return _config_bool(read_config(drift).get(AUTO_EXPORT_CONFIG_KEY), default=True)
 
 
+#: P8-X2: `export_formats` was documented in the original spec and read nowhere —
+#: `write_reports` always got its own hardcoded default. Same defect class as the
+#: `auto_export: "false"` bug fixed in P8-A1, one config key up: something written
+#: down as a real setting that silently did not do anything.
+EXPORT_FORMATS_CONFIG_KEY = "export_formats"
+DEFAULT_EXPORT_FORMATS: Tuple[str, ...] = ("json", "md")
+_VALID_EXPORT_FORMATS = {"json", "md"}
+
+
+def _resolved_export_formats(drift: Path) -> Tuple[Tuple[str, ...], Optional[str]]:
+    """`export_formats` from config.yaml, coerced to what `write_reports` accepts,
+    plus a warning string when the configured value could not be honoured as written.
+
+    Fallback, never an exception: `_auto_diff` builds `lines` and writes reports
+    inside one `try` block specifically so a failure partway through never leaves a
+    half-printed block (see its own docstring) — letting an invalid `export_formats`
+    raise up through `write_reports` would suppress the ENTIRE auto-diff terminal
+    block over a config typo, not just the export. So every branch below returns
+    something `write_reports` will accept; the second element is only ever a message
+    for the caller to surface, never a signal to abort.
+
+    `export_formats: json` (a bare string, not a list) is accepted as `["json"]`
+    without even a warning — that is the shape someone reaches for first, and there
+    is nothing ambiguous about what they meant. An unrecognised entry inside an
+    otherwise-valid list (`[json, csv]`) is dropped, with a warning naming it, and
+    the recognised entries still get written. A value with no usable format at all
+    (a bad type, an empty list, a string or list of nothing but unrecognised names)
+    falls all the way back to `DEFAULT_EXPORT_FORMATS`.
+    """
+    raw = read_config(drift).get(EXPORT_FORMATS_CONFIG_KEY)
+    if raw is None:
+        return DEFAULT_EXPORT_FORMATS, None
+
+    if isinstance(raw, str):
+        candidates: Any = [raw]
+    elif isinstance(raw, (list, tuple)):
+        candidates = raw
+    else:
+        return DEFAULT_EXPORT_FORMATS, (
+            f"export_formats: {raw!r} is not a string or a list of strings — "
+            f"writing the default {list(DEFAULT_EXPORT_FORMATS)}."
+        )
+
+    valid = [c for c in candidates if isinstance(c, str) and c in _VALID_EXPORT_FORMATS]
+    invalid = [c for c in candidates if c not in valid]
+
+    if not valid:
+        return DEFAULT_EXPORT_FORMATS, (
+            f"export_formats: {raw!r} names no recognised format (want json, md) — "
+            f"writing the default {list(DEFAULT_EXPORT_FORMATS)}."
+        )
+    if invalid:
+        return tuple(valid), (
+            f"export_formats: ignoring unrecognised value(s) {invalid!r} (want json, "
+            f"md) — writing {valid}."
+        )
+    return tuple(valid), None
+
+
 def _write_reports(
     diffs: List[CaseDiff],
     comparability: Comparability,
@@ -412,6 +471,7 @@ def _write_reports(
     created_at: str,
     removed: List[str],
     drift: Path,
+    formats: Sequence[str] = DEFAULT_EXPORT_FORMATS,
 ) -> None:
     """Thin wrapper so tests can monkeypatch this without report.py needing to exist.
 
@@ -427,7 +487,7 @@ def _write_reports(
 
     write_reports(
         diffs, comparability, baseline_hash, candidate_hash, created_at,
-        removed=removed, drift=drift,
+        removed=removed, drift=drift, formats=tuple(formats),
     )
 
 
@@ -473,10 +533,13 @@ def _auto_diff(reporter, drift: Path, snapshot: Snapshot) -> None:
         comparability = judge_comparability(before.manifest, snapshot.manifest)
         lines = _auto_diff_lines(diffs, comparability, baseline_hash)
         if _auto_export_enabled(drift):
+            formats, format_warning = _resolved_export_formats(drift)
+            if format_warning:
+                _warn(reporter.config, format_warning)
             created_at = _iso(datetime.now(timezone.utc).timestamp())
             _write_reports(
                 diffs, comparability, before.commit_hash, snapshot.commit_hash,
-                created_at, removed, drift,
+                created_at, removed, drift, formats=formats,
             )
     except Exception:  # noqa: BLE001 - see docstring: never break the host suite
         return
