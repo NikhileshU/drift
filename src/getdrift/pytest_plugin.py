@@ -10,17 +10,32 @@ fixture, so a suite can report them without importing Drift.
 """
 
 import json
+import os
 import warnings
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+from getdrift.diffing import (
+    BUCKET_ORDER,
+    SUPPRESSED_MARKER,
+    UNKNOWN,
+    CaseDiff,
+    Comparability,
+    compare,
+    judge_comparability,
+)
 from getdrift.gitutil import GitError
+from getdrift.paths import read_config
 from getdrift.schema import SCHEMA_VERSION, SchemaValidationError
 from getdrift.snapshot import (
     NotInitializedError,
+    Snapshot,
     SnapshotError,
     SnapshotExistsError,
     create_snapshot,
+    load_snapshot,
+    nearest_ancestor_snapshot,
 )
 
 SCORE_PREFIX = "drift.score."
@@ -197,6 +212,13 @@ def pytest_sessionfinish(session, exitstatus):
         return
 
     _report(config, f"snapshot written: {snapshot.path} ({len(collector.cases)} case(s))")
+    # Stashed rather than diffed right here: pytest_sessionfinish runs interleaved
+    # with other plugins' own sessionfinish hooks, including the terminalreporter's,
+    # so anything printed from here can land before test output is even done —
+    # `pytest_terminal_summary` is pytest's dedicated hook for a plugin's own summary
+    # section instead: it fires after the FAILURES section, in the same slot
+    # pytest-cov's coverage table lands in. See `_auto_diff` below.
+    config._drift_snapshot = snapshot
 
 
 def _report(config, message: str) -> None:
@@ -217,3 +239,221 @@ def _warn(config, message: str) -> None:
         warnings.warn(f"Drift: {message}", stacklevel=2)
     except Exception:  # noqa: BLE001 - a warning filter must not fail the suite
         pass
+
+
+# --- P7-J1: auto-diff against the nearest ancestor snapshot -------------------------
+#
+# Runs after a snapshot is written. Reports only — never gates. `drift ci` is the
+# thing CI fails on; this exists so a human sees "you just regressed X" without
+# leaving the terminal they were already looking at.
+
+AUTO_DIFF_ENV = "DRIFT_AUTO_DIFF"
+
+#: Bucket names for which a nonzero count also lists the case ids. New coverage and
+#: anything that actually changed a verdict is worth naming; Improved/Unchanged are
+#: not — at N cases either could be the whole suite, and that is what `drift diff`
+#: is for. Matches the spec: "Case names listed ONLY for non-zero Fixed/Regressed/
+#: Degraded/New."
+NAMED_BUCKETS = {"Fixed", "Regressed", "Degraded", "New"}
+
+
+def _auto_diff_enabled(config, drift: Path) -> bool:
+    """Env wins over config; config's own default is on.
+
+    `DRIFT_AUTO_DIFF=0` disables regardless of config.yaml. Any other env value, or
+    no env var at all, falls through to `auto_diff` in config.yaml, which defaults to
+    on — only an explicit `auto_diff: false` turns it off.
+    """
+    env = os.environ.get(AUTO_DIFF_ENV)
+    if env is not None:
+        return env.strip() != "0"
+    return read_config(drift).get("auto_diff", True) is not False
+
+
+def _names(cases: List[CaseDiff]) -> str:
+    return ", ".join(sorted(c.case_id for c in cases))
+
+
+#: A boxed block, not six `Drift: `-prefixed repetitions: the header alone carries the
+#: "this is Drift" context, so the reader scans an aligned block instead of the same
+#: six-character prefix six times. Width is cosmetic, not a contract — nothing parses
+#: it — chosen only to roughly match the spec's own quoted example.
+_BLOCK_WIDTH = 40
+_HEADER = ("── Drift " + "─" * _BLOCK_WIDTH)[:_BLOCK_WIDTH]
+_FOOTER = "─" * _BLOCK_WIDTH
+#: Longest bucket name ("Regressed"/"Unchanged") plus one column of breathing room,
+#: so every count lines up under the next regardless of which bucket it belongs to.
+_LABEL_WIDTH = max(len(b) for b in BUCKET_ORDER) + 1
+
+
+def _bucket_line(bucket: str, cases: List[CaseDiff]) -> str:
+    line = f"  {bucket.ljust(_LABEL_WIDTH)}{len(cases)}"
+    if bucket in NAMED_BUCKETS and cases:
+        line += f": {_names(cases)}"
+    return line
+
+
+def _auto_diff_lines(
+    diffs: List[CaseDiff], comparability: Comparability, baseline_hash: str
+) -> List[str]:
+    """The compact terminal block, as plain lines — no colour, this is pytest output.
+
+    Opens with the baseline it compared against: a verdict is meaningless without
+    knowing what it is a verdict against, and unlike `drift diff` (baseline and
+    candidate both named on the command line) this path never shows it anywhere else
+    the reader is looking. Mirrors `drift diff`'s own MISMATCH/UNKNOWN wording
+    verbatim (the spec's instruction): a team should not learn two different
+    sentences for the same fact depending on whether they read it here or ran
+    `drift diff` by hand.
+    """
+    lines = [_HEADER, f"  vs {baseline_hash[:8]} (previous run, same branch)", ""]
+
+    if comparability.suppresses_verdicts:
+        fresh = [c for c in diffs if c.bucket == "New"]
+        lines += [
+            f"  Not directly comparable — {comparability.detail}.",
+            "  Fixed / Regressed / Improved / Degraded / Unchanged are suppressed: "
+            "a verdict on these deltas would be about the rubric, not the model.",
+            "",
+            _bucket_line("New", fresh),
+            _FOOTER,
+        ]
+        return lines
+
+    if comparability.state == UNKNOWN:
+        lines.append(
+            f"  warning: {comparability.detail}. The verdicts below are unverified "
+            "— pass --judge-version to `drift snapshot` so Drift can check them."
+        )
+        lines.append("")
+
+    for bucket in BUCKET_ORDER:
+        cases = [c for c in diffs if c.bucket == bucket]
+        lines.append(_bucket_line(bucket, cases))
+
+    noisy = [c for c in diffs if c.noise_filtered]
+    flips = [c for c in diffs if c.pass_flip_filtered]
+    suppressed = [
+        (cases, reason)
+        for cases, reason in (
+            (noisy, "moved past the threshold but stayed inside the noise floor"),
+            (flips, "had a pass flip that did not survive the majority across runs"),
+        )
+        if cases
+    ]
+    if suppressed:
+        lines.append("")
+        for cases, reason in suppressed:
+            lines.append(
+                f"  {SUPPRESSED_MARKER} {len(cases)} case(s) {reason}: {_names(cases)}"
+            )
+
+    lines.append(_FOOTER)
+    return lines
+
+
+def _resolve_baseline(drift: Path, exclude: str) -> Optional[str]:
+    """The nearest-ancestor snapshot's commit hash, or None if there is not one.
+
+    Thin wrapper over `nearest_ancestor_snapshot` (P7-D1) so tests can monkeypatch it
+    without touching git — same reasoning as `_write_reports` below. `exclude` is
+    passed as `commit`: the ancestry walk to search from, which for auto-diff is
+    always the commit that was just snapshotted (usually HEAD, but explicit here
+    rather than relying on that default — a pytest run against a detached, non-HEAD
+    commit should still diff from the right place).
+    """
+    return nearest_ancestor_snapshot(commit=exclude, drift=drift)
+
+
+#: Whether `write_reports` runs at all. A second, independent switch from
+#: `auto_diff`: the terminal block is transient, gone when the log scrolls past — a
+#: written report file persists on disk on every single test run, which is a bigger
+#: default footprint to opt someone into. Config-only (no env override): unlike
+#: auto_diff, nothing in the brief asked for one, and a second env var doubles the
+#: surface for no requirement behind it — add one if a real need shows up.
+AUTO_EXPORT_CONFIG_KEY = "auto_export"
+
+
+def _auto_export_enabled(drift: Path) -> bool:
+    return read_config(drift).get(AUTO_EXPORT_CONFIG_KEY, True) is not False
+
+
+def _write_reports(
+    diffs: List[CaseDiff],
+    comparability: Comparability,
+    baseline_hash: str,
+    candidate_hash: str,
+    created_at: str,
+    removed: List[str],
+    drift: Path,
+) -> None:
+    """Thin wrapper so tests can monkeypatch this without report.py needing to exist.
+
+    P7-A1 (Angela): src/getdrift/report.py. Final signature: `write_reports(diffs,
+    comparability, baseline_hash, candidate_hash, created_at, removed=(), drift=None,
+    formats=("json", "md")) -> List[Path]`. Imported lazily, at call time, so this
+    module loads fine before report.py exists — and so that a missing or broken
+    report.py degrades to "no report written, nothing printed" rather than an
+    ImportError at plugin registration that would break every suite using Drift at
+    all, not just the auto-diff feature.
+    """
+    from getdrift.report import write_reports
+
+    write_reports(
+        diffs, comparability, baseline_hash, candidate_hash, created_at,
+        removed=removed, drift=drift,
+    )
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Print the auto-diff block, if any — pytest's own dedicated slot for it.
+
+    A dedicated hook rather than doing this inline at the end of
+    `pytest_sessionfinish`: that hook runs interleaved with every other plugin's own
+    `pytest_sessionfinish`, including the terminal reporter's, so anything printed
+    there could land mid-test-output. `pytest_terminal_summary` fires once, after the
+    FAILURES section and before pytest's own "short test summary info" and final
+    one-line footer — the same slot pytest-cov's coverage table or
+    pytest-benchmark's results print into — see `_auto_diff`.
+    """
+    snapshot = getattr(config, "_drift_snapshot", None)
+    if snapshot is not None:
+        _auto_diff(terminalreporter, snapshot.path.parent.parent, snapshot)
+
+
+def _auto_diff(reporter, drift: Path, snapshot: Snapshot) -> None:
+    """Print a compact diff against the nearest ancestor snapshot, if there is one.
+
+    Every failure here — no repo, no git, `nearest_ancestor_snapshot` itself never
+    raises but a malformed snapshot on disk can still break `load_snapshot`/
+    `compare`, an unreadable report dir — must degrade to printing nothing and
+    letting pytest finish normally. This is a report, never a gate: `exitstatus` is
+    never read or touched, so a Regressed/Degraded finding here cannot change
+    pytest's own exit code.
+
+    Everything is built into `lines` before anything is printed, and report writing
+    happens before the print too — so a failure partway through (a broken report
+    dir, say) can never leave a half-printed, confusing block.
+    """
+    try:
+        if not _auto_diff_enabled(reporter.config, drift):
+            return
+        baseline_hash = _resolve_baseline(drift, exclude=snapshot.commit_hash)
+        if baseline_hash is None:
+            return  # spec: no ancestor means print NOTHING, not even a notice
+        before = load_snapshot(baseline_hash, drift)
+        # compare()'s own removed list — not recomputed, per god's ruling.
+        diffs, removed = compare(before.results, snapshot.results)
+        comparability = judge_comparability(before.manifest, snapshot.manifest)
+        lines = _auto_diff_lines(diffs, comparability, baseline_hash)
+        if _auto_export_enabled(drift):
+            created_at = _iso(datetime.now(timezone.utc).timestamp())
+            _write_reports(
+                diffs, comparability, before.commit_hash, snapshot.commit_hash,
+                created_at, removed, drift,
+            )
+    except Exception:  # noqa: BLE001 - see docstring: never break the host suite
+        return
+
+    for line in lines:
+        reporter.write_line(line)
