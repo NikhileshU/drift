@@ -284,7 +284,7 @@ def test_a_slash_in_created_at_cannot_escape_reports_dir(tmp_path, demo_diffs):
     drift = tmp_path / ".drift"
     outside = tmp_path / "outside"
     outside.mkdir()
-    with pytest.raises(ValueError):
+    with pytest.raises(ReportWriteError):
         write_reports(
             demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH,
             created_at="../../outside/pwned", drift=drift,

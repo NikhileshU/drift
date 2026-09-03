@@ -316,7 +316,6 @@ def write_reports(
     reports_dir = (drift if drift is not None else drift_dir()) / REPORTS_DIRNAME
     _require_contained(reports_dir, reports_dir.parent)
     reports_dir.mkdir(parents=True, exist_ok=True)
-    reports_real = reports_dir.resolve()
 
     written: List[Path] = []
     for fmt in formats:
@@ -339,15 +338,7 @@ def write_reports(
         # pattern as `resolve_snapshot` — catches both, structurally, rather than
         # trying to blocklist the characters that produce them. See P8-D1.
         archive = reports_dir / _archive_name(created_at, candidate_hash, ext)
-<<<<<<< HEAD
-        if archive.resolve().parent != reports_real:
-            raise ValueError(
-                f"refusing to write a report archive outside {reports_real} "
-                f"(created_at={created_at!r} produced {archive})"
-            )
-=======
         _require_contained(archive, reports_dir)
->>>>>>> e3d1fbc
         if not archive.exists():
             archive.write_text(content, encoding="utf-8")
         written.append(archive)
