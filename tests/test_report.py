@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from getdrift.diffing import Comparability, compare
-from getdrift.report import render_json, render_markdown, write_reports
+from getdrift.report import ReportWriteError, render_json, render_markdown, write_reports
 
 DEMO = Path(__file__).resolve().parent.parent / "examples" / "demo"
 
@@ -280,15 +280,6 @@ def test_write_reports_default_drift_dir_is_the_repo_drift_dir(git_repo, demo_di
     assert all(str(git_repo / ".drift" / "reports") in str(p) for p in paths)
 
 
-# --- P8-D1: created_at cannot escape reports_dir into an arbitrary write -----------
-#
-# `created_at` names the archive file (`_archive_name`) and isn't Drift's own value —
-# see the module's own docstring on the two intended callers. `_timestamp_slug` only
-# strips `:` and `.`, so a `created_at` carrying `/` (or a leading `/`, which pathlib's
-# `/` treats as absolute and uses to override `reports_dir` entirely) must still land
-# only inside `reports_dir`, never write outside it.
-
-
 def test_a_slash_in_created_at_cannot_escape_reports_dir(tmp_path, demo_diffs):
     drift = tmp_path / ".drift"
     outside = tmp_path / "outside"
@@ -301,25 +292,77 @@ def test_a_slash_in_created_at_cannot_escape_reports_dir(tmp_path, demo_diffs):
     assert list(outside.iterdir()) == []
 
 
-def test_an_absolute_created_at_cannot_override_reports_dir(tmp_path, demo_diffs):
-    """The sharper case: pathlib's `/` treats a leading-`/` right side as absolute and
-    silently drops `reports_dir` from the join — this must still be refused, not just
-    the relative `../` case above."""
+# --- write_reports: security -------------------------------------------------------
+#
+# P8-A1: report.py writes files on every test run in other people's repos, with
+# auto_export defaulting on. These pin the two attacks a hostile repo could mount.
+
+
+def test_write_reports_refuses_a_symlinked_reports_directory(tmp_path, demo_diffs):
+    """A repo can ship `.drift/reports` as a checked-in symlink (git commits symlinks
+    natively). Proven exploit before this guard existed: every file landed at the
+    symlink's target, entirely outside `.drift/reports/`, with no error."""
     drift = tmp_path / ".drift"
-    target = tmp_path / "somewhere_else"
-    target.mkdir()
-    with pytest.raises(ValueError):
+    drift.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (drift / "reports").symlink_to(outside)
+
+    with pytest.raises(ReportWriteError):
+        write_reports(demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, drift=drift)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_write_reports_refuses_a_symlinked_latest_file(tmp_path, demo_diffs):
+    """Same attack, aimed at one file instead of the whole directory: `latest.json`
+    itself as a checked-in symlink to something the report's content would overwrite
+    on every run (`latest.*` is unconditionally rewritten)."""
+    drift = tmp_path / ".drift"
+    reports = drift / "reports"
+    reports.mkdir(parents=True)
+    target = tmp_path / "victim.txt"
+    target.write_text("original content\n")
+    (reports / "latest.json").symlink_to(target)
+
+    with pytest.raises(ReportWriteError):
+        write_reports(demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, drift=drift)
+
+    assert target.read_text() == "original content\n"
+
+
+def test_write_reports_refuses_an_absolute_path_created_at(tmp_path, demo_diffs):
+    """`created_at` is never sanitised before being formatted into a filename
+    (`_timestamp_slug` only strips ':' and '.'). Proven exploit before this guard
+    existed: `created_at="/tmp/x/pwned"` wrote `pwned_<hash>.json` completely outside
+    `.drift/reports/` — an arbitrary-location write with no exception raised."""
+    drift = tmp_path / ".drift"
+    escape_target = tmp_path / "pwned"
+
+    with pytest.raises(ReportWriteError):
         write_reports(
-            demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH,
-            created_at=f"{target}/pwned", drift=drift,
+            demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, str(escape_target), drift=drift,
         )
-    assert list(target.iterdir()) == []
+
+    assert not list(tmp_path.glob("pwned*"))
 
 
-def test_an_ordinary_created_at_still_writes_normally(tmp_path, demo_diffs):
-    """The containment check must not false-positive on real ISO-8601 timestamps."""
+def test_write_reports_refuses_a_traversal_candidate_hash(tmp_path, demo_diffs):
+    """Same class of bug, via the other unsanitised input: `candidate_hash` (its
+    first 12 characters land directly in the archive filename)."""
     drift = tmp_path / ".drift"
-    paths = write_reports(
-        demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, drift=drift,
-    )
+    with pytest.raises(ReportWriteError):
+        write_reports(
+            demo_diffs, EQUAL, BASELINE_HASH, "../../../../../../etc/evil", CREATED_AT,
+            drift=drift,
+        )
+
+
+def test_write_reports_ordinary_inputs_are_unaffected_by_the_guard(tmp_path, demo_diffs):
+    """The guard must not false-positive on the normal case: real git hashes and a
+    real manifest timestamp, run twice (covering both the fresh-write and the
+    already-exists-on-disk paths through `_require_contained`)."""
+    drift = tmp_path / ".drift"
+    write_reports(demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, drift=drift)
+    paths = write_reports(demo_diffs, EQUAL, BASELINE_HASH, CANDIDATE_HASH, CREATED_AT, drift=drift)
     assert all(p.exists() for p in paths)
