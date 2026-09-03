@@ -16,15 +16,21 @@ classifiers = [
   "Environment :: Console",
   "Topic :: Software Development :: Testing",
 ]
+# Floors verified: the full suite (371 tests, PYTHONPATH pinned to src/) passes green
+# against typer 0.12.0, rich 14.0.0, jsonschema 4.20.0, PyYAML 6.0.0 in an isolated venv
+# (2026-09-03). No upper bounds — Drift is a library other projects import, and a
+# ceiling here just pushes resolver conflicts onto every downstream user; CI catches
+# breakage on our side instead. jsonschema's floor matters most: it parses untrusted
+# input (ingested harness output, on-disk results.json).
 dependencies = [
-  "typer>=0.9",
-  "rich>=13.0",
+  "typer>=0.12",
+  "rich>=14.0",
   "PyYAML>=6.0",
-  "jsonschema>=4.0",
+  "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "opentelemetry-sdk>=1.20"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "opentelemetry-sdk>=1.20"]
 # Only needed to register DriftSpanCollector as a live span processor; the span ->
 # results.json conversion itself has no OTel dependency.
 otel = ["opentelemetry-sdk>=1.20"]
@@ -47,6 +53,12 @@ where = ["src"]
 getdrift = ["schemas/*.json", "templates/*.yaml"]
 
 [tool.pytest.ini_options]
+# Measuring coverage: use `coverage run --branch --source=getdrift -m pytest`, not
+# `pytest --cov=getdrift`. getdrift registers as a pytest11 entry-point plugin, so its
+# top-level code runs during pytest's plugin bootstrap, before pytest-cov's own hook
+# attaches tracing — `pytest --cov` under-reports by ~12 points (77% vs the real 89%)
+# and coverage.py warns "module-not-measured" when this happens.
+#
 # The suite is `tests/`, and only `tests/`. Without this, what "the tests" means depends
 # on how pytest was invoked: a bare run from the repo root also collects
 # `examples/pytest/tests/`, which is sample eval data, not a test of Drift. Two people
