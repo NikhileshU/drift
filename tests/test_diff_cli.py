@@ -234,3 +234,18 @@ def test_duplicate_case_id_across_environments_is_a_clear_error(git_repo):
     assert result.exit_code == 1
     assert "error:" in result.output
     assert dup["case_id"] in result.output
+
+
+def test_a_non_mapping_config_yaml_is_a_clean_error_not_a_traceback(git_repo):
+    """P8-X1: read_config raises ConfigError for a broken config.yaml shape; `drift
+    diff` must turn that into `error: ...` + exit 1, the same as every other config
+    problem, not let it escape as a bare AttributeError traceback."""
+    first, second = _two_snapshots(git_repo)
+    (git_repo / ".drift" / "config.yaml").write_text("- not\n- a\n- mapping\n")
+
+    result = runner.invoke(app, ["diff", first, second])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    # A clean `fail()` raises typer.Exit, which the runner does not record as an
+    # unhandled exception; an escaped AttributeError would show up here instead.
+    assert result.exception is None or isinstance(result.exception, SystemExit)

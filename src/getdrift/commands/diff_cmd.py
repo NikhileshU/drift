@@ -25,7 +25,7 @@ from getdrift.diffing import (
     judge_comparability,
 )
 from getdrift.gitutil import GitError
-from getdrift.paths import drift_dir, read_config
+from getdrift.paths import ConfigError, drift_dir, read_config
 from getdrift.snapshot import Snapshot, SnapshotError, load_snapshot
 from getdrift.trend import load_history
 
@@ -332,8 +332,11 @@ def diff(
     if before.path == after.path:
         fail(f"both arguments resolve to the same snapshot ({before.path.name})")
 
-    resolved_threshold = _threshold(drift, threshold)
-    resolved_sigma = _noise_sigma(drift, noise_sigma)
+    try:
+        resolved_threshold = _threshold(drift, threshold)
+        resolved_sigma = _noise_sigma(drift, noise_sigma)
+    except ConfigError as exc:
+        fail(exc)
     resolved_env = environment.value if environment is not None else None
     try:
         diffs, removed = compare(
