@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from getdrift.diffing import DEFAULT_THRESHOLD, compare
+from getdrift.diffing import DEFAULT_THRESHOLD, DuplicateCaseIdError, case_index, compare
 
 DEMO = Path(__file__).resolve().parent.parent / "examples" / "demo"
 
@@ -104,11 +104,63 @@ def test_new_case_has_no_delta():
     assert diffs[0].score_after == pytest.approx(0.7)
 
 
-def _case(case_id, score, passed):
+def _case(case_id, score, passed, environment="golden_set"):
     return {
         "case_id": case_id,
         "metric_scores": {"answer_correctness": score},
         "pass": passed,
-        "environment": "golden_set",
+        "environment": environment,
         "timestamp": "2026-09-01T09:41:02Z",
     }
+
+
+# --- P6-A1: same case_id run in two environments must not silently vanish ---------
+#
+# `drift snapshot` already refuses a duplicate case_id at write time — these fixtures
+# stand in for a snapshot written some other way (a legacy file predating that check,
+# or one produced outside `drift snapshot` entirely), which is the only way a
+# duplicate reaches `compare()` at all.
+
+
+def test_duplicate_case_id_in_before_refuses_instead_of_dropping_one():
+    before = {
+        "cases": [
+            _case("c", 0.9, True, "golden_set"),
+            _case("c", 0.1, False, "production_sample"),
+        ]
+    }
+    after = {"cases": [_case("c", 0.9, True, "golden_set")]}
+    with pytest.raises(DuplicateCaseIdError, match="'c'"):
+        compare(before, after)
+
+
+def test_duplicate_case_id_in_after_also_refuses():
+    """Line 279's `current` set used to silently collapse a duplicate on this side
+    too — a set membership test hides it just as effectively as the dict did."""
+    before = {"cases": [_case("c", 0.9, True, "golden_set")]}
+    after = {
+        "cases": [
+            _case("c", 0.9, True, "golden_set"),
+            _case("c", 0.1, False, "production_sample"),
+        ]
+    }
+    with pytest.raises(DuplicateCaseIdError, match="'c'"):
+        compare(before, after)
+
+
+def test_duplicate_case_id_error_names_both_environments():
+    cases = [
+        _case("dup", 0.5, True, "golden_set"),
+        _case("dup", 0.5, True, "production_sample"),
+    ]
+    with pytest.raises(DuplicateCaseIdError) as excinfo:
+        case_index(cases)
+    assert "golden_set" in str(excinfo.value)
+    assert "production_sample" in str(excinfo.value)
+
+
+def test_no_duplicates_is_unaffected():
+    """The common case — every case_id unique — must keep working exactly as before."""
+    cases = [_case("a", 0.5, True), _case("b", 0.6, True)]
+    index = case_index(cases)
+    assert set(index) == {"a", "b"}

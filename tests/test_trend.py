@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from getdrift.diffing import DuplicateCaseIdError
 from getdrift.snapshot import Snapshot
 from getdrift.trend import case_trend, load_history, metric_trend
 
@@ -286,3 +287,28 @@ def test_same_second_snapshots_are_ordered_by_commit_ancestry(git_repo):
     assert [round(p.score, 3) for p in trend.points] == [0.900, 0.870, 0.840, 0.810]
     assert trend.slow_drift is not None
     assert trend.slow_drift.snapshots == 4
+
+
+# --- P6-A1: a duplicate case_id within one snapshot must not silently pick one -----
+
+
+def test_case_trend_refuses_a_snapshot_with_a_duplicate_case_id():
+    """`_case_of` used to `next()` to the first match, silently ignoring the second
+    entry — the same drop `compare()` made, just walked one snapshot at a time."""
+    dup_snapshot = Snapshot(
+        path=Path("/nonexistent/dup"),
+        commit_hash="d" * 40,
+        results={
+            "schema_version": "1.1.0",
+            "cases": [
+                {"case_id": "x", "metric_scores": {"accuracy": 0.9}, "pass": True,
+                 "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+                {"case_id": "x", "metric_scores": {"accuracy": 0.1}, "pass": False,
+                 "environment": "production_sample", "timestamp": "2026-09-01T09:00:00Z"},
+            ],
+        },
+        manifest={"commit_hash": "d" * 40, "created_at": "2026-09-01T09:00:00Z",
+                  "judge_version": "rubric-v1"},
+    )
+    with pytest.raises(DuplicateCaseIdError, match="'x'"):
+        case_trend("x", history=[dup_snapshot])

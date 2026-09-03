@@ -22,7 +22,7 @@ from getdrift.commands.diff_cmd import (
     _threshold,
     _uncomparable,
 )
-from getdrift.diffing import UNKNOWN, compare, judge_comparability
+from getdrift.diffing import UNKNOWN, DuplicateCaseIdError, compare, judge_comparability
 from getdrift.gitutil import GitError, commits_on, has_uncommitted_changes, head_hash
 from getdrift.paths import drift_dir, read_config
 from getdrift.snapshot import SnapshotError, load_snapshot
@@ -129,9 +129,12 @@ def ci(
 
     resolved_threshold = _threshold(drift, threshold)
     resolved_sigma = _noise_sigma(drift, noise_sigma)
-    diffs, removed = compare(
-        before.results, after.results, resolved_threshold, resolved_sigma
-    )
+    try:
+        diffs, removed = compare(
+            before.results, after.results, resolved_threshold, resolved_sigma
+        )
+    except DuplicateCaseIdError as exc:
+        fail(exc)
     comparability = judge_comparability(before.manifest, after.manifest)
 
     console = Console(highlight=False)

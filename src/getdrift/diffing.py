@@ -92,6 +92,18 @@ def judge_comparability(
     )
 
 
+class DuplicateCaseIdError(ValueError):
+    """Two cases in the same results.json share a `case_id`.
+
+    `drift snapshot` already refuses this at write time — `case_id` must be unique
+    within a run (schema.py's `_duplicate_case_ids`). Reaching `compare()` with a
+    duplicate means the data got here some other way: a snapshot written before that
+    check existed, or a results.json produced outside `drift snapshot`. Keying a dict
+    comprehension on `case_id` would silently keep one of the two and drop the other
+    — the one outcome that is not acceptable — so this refuses instead.
+    """
+
+
 @dataclass
 class CaseStats:
     """One case reduced to the numbers a verdict is drawn from.
@@ -188,6 +200,32 @@ def _majority(passes: int, n: int, reported: bool) -> bool:
     return passes * 2 > n
 
 
+def case_index(cases: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """`case_id` -> case for one snapshot's `cases` list, or raise on a repeat id.
+
+    Public, and the single place that turns a `cases` array into a lookup — `compare()`
+    needs it for both snapshots, and `trend.py` needs the same lookup per snapshot it
+    walks. One guard here beats a second one growing independently wherever else a
+    case list gets scanned by id, and it means the duplicate check can't fall out of
+    sync between them the way it did before this existed.
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    for case in cases:
+        case_id = case["case_id"]
+        if case_id in index:
+            envs = sorted(
+                {index[case_id].get("environment"), case.get("environment")} - {None}
+            )
+            raise DuplicateCaseIdError(
+                f"case_id {case_id!r} appears more than once in one results.json "
+                f"(environments: {', '.join(envs) or 'unknown'}) — compare() cannot "
+                "tell which one is meant. `drift snapshot` already refuses this; "
+                "re-run it, or fix whatever wrote this file directly."
+            )
+        index[case_id] = case
+    return index
+
+
 def _bucket_case(
     before: Optional[Dict[str, Any]],
     after: Dict[str, Any],
@@ -270,12 +308,17 @@ def compare(
     Returns the diffs plus the ids of cases that were in `before` and are gone from
     `after`. The spec defines six buckets and "removed" is not one of them, so those
     ids are reported separately rather than invented into a seventh bucket.
+
+    Raises DuplicateCaseIdError if either snapshot repeats a `case_id` — most likely
+    the same case run in two `environment`s. Silently keeping one and dropping the
+    other is not a fixable-later ambiguity, so both `before` and `after` are checked,
+    not just the one the old code happened to build a dict from.
     """
-    prior = {case["case_id"]: case for case in before["cases"]}
+    prior = case_index(before["cases"])
+    current = case_index(after["cases"])
     diffs = [
         _bucket_case(prior.get(c["case_id"]), c, threshold, noise_sigma)
         for c in after["cases"]
     ]
-    current = {case["case_id"] for case in after["cases"]}
     removed = [case_id for case_id in prior if case_id not in current]
     return diffs, removed
