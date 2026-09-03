@@ -13,6 +13,8 @@ from getdrift.diffing import (
     DEFAULT_NOISE_SIGMA,
     DEFAULT_THRESHOLD,
     ENVIRONMENT_MISMATCH,
+    REMOVED_MARKER,
+    SUPPRESSED_MARKER,
     UNKNOWN,
     CaseDiff,
     Comparability,
@@ -40,13 +42,6 @@ BUCKET_STYLE = {
 #: two are there because "what else moved?" is the first question a human asks when a
 #: diff comes back flagged as uncomparable.
 PROVENANCE = ("judge_version", "model_version", "prompt_version")
-
-#: Plain-ASCII prefixes on the two notes that report withheld or lost cases. They exist
-#: because colour does not survive a CI log, and these are the lines that must. Distinct
-#: from the lowercase `warning:` used elsewhere: nothing here is wrong, something is
-#: being withheld or has gone missing, and the two deserve different words.
-SUPPRESSED_MARKER = "SUPPRESSED:"
-REMOVED_MARKER = "REMOVED:"
 
 
 def _threshold(drift: Path, override: Optional[float]) -> float:

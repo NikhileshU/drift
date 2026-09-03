@@ -17,8 +17,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from getdrift.commands.diff_cmd import REMOVED_MARKER
-from getdrift.diffing import BUCKET_ORDER, ENVIRONMENT_MISMATCH, CaseDiff, Comparability
+from getdrift.diffing import (
+    BUCKET_ORDER,
+    ENVIRONMENT_MISMATCH,
+    REMOVED_MARKER,
+    CaseDiff,
+    Comparability,
+)
 from getdrift.paths import drift_dir
 
 REPORTS_DIRNAME = "reports"

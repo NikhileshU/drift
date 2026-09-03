@@ -343,3 +343,22 @@ def test_the_shipped_example_suite_still_snapshots(tmp_path):
     scored = [c for c in results["cases"] if "answer_similarity" in c["metric_scores"]]
     assert scored, f"no case carried answer_similarity: {ids}"
     assert all(case["pass"] for case in results["cases"])
+
+
+def test_importing_the_plugin_does_not_pull_in_the_cli_stack():
+    """The plugin runs inside OTHER PEOPLE'S test suites — its whole promise is "run
+    your normal pytest, unchanged". If it (or anything it imports, `report.py`
+    included) ever pulls in typer/rich/click, every Drift user's pytest run loads the
+    entire CLI stack at collection time: slower, and a new import-time failure surface
+    in suites that have nothing to do with Drift.
+
+    Run in a clean subprocess rather than asserted in-process: pytest itself may have
+    already imported `rich` (or a plugin might), which would mask the exact regression
+    this test exists to catch.
+    """
+    check = (
+        "import getdrift.pytest_plugin, sys; "
+        "assert not {'typer', 'rich', 'click'} & {m.split('.')[0] for m in sys.modules}"
+    )
+    result = subprocess.run([sys.executable, "-c", check], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
