@@ -254,17 +254,27 @@ def case_stats(case: Dict[str, Any], metrics: List[str]) -> CaseStats:
     Public because the trend view reduces a case to exactly these numbers. Two
     implementations of "what this case scored" would eventually disagree, and the
     disagreement would show up as a trend that contradicts the diff.
+
+    `metrics` with more than one entry yields no `mean`/`sd` (`scores` stays empty) —
+    P6-J1 fixed every call site that used to average unrelated metrics into one number,
+    but the averaging code itself, `_mean(values)` over several metrics' values in one
+    run, was still sitting here, correct and meaningless, for whichever future caller
+    passed it two metrics without knowing better. `passed`/`passes`/`n` are unaffected:
+    they come from each run's own `pass`, never from a score, so a caller that only
+    wants those (as `_bucket_case` does for its `New`/pass-flip cases) is unharmed by
+    this — only the score-shaped fields refuse to answer a scale-mixing question.
     """
     runs = _runs_of(case)
     scores = []
-    for run in runs:
-        values = [run["metric_scores"][m] for m in metrics if m in run["metric_scores"]]
-        # A run that carries none of the requested metrics falls back to the case-level
-        # scores, which are required and therefore always complete.
-        if not values:
-            values = [case["metric_scores"][m] for m in metrics if m in case["metric_scores"]]
-        if values:
-            scores.append(_mean(values))
+    if len(metrics) <= 1:
+        for run in runs:
+            values = [run["metric_scores"][m] for m in metrics if m in run["metric_scores"]]
+            # A run that carries none of the requested metrics falls back to the
+            # case-level scores, which are required and therefore always complete.
+            if not values:
+                values = [case["metric_scores"][m] for m in metrics if m in case["metric_scores"]]
+            if values:
+                scores.append(_mean(values))
     passes = sum(1 for run in runs if run["pass"])
     return CaseStats(
         scores=scores,

@@ -9,6 +9,7 @@ from getdrift.diffing import (
     ENVIRONMENT_MISMATCH,
     DuplicateCaseIdError,
     case_index,
+    case_stats,
     compare,
     filter_environment,
 )
@@ -323,3 +324,36 @@ def test_filter_environment_before_matching_removes_the_collision():
     )
     assert diffs == []  # nothing on the golden_set side of `after` to match
     assert removed == ["c"]  # c was golden_set in before, absent from the filtered after
+# --- P6-J2: case_stats itself must refuse to blend, not just go unread -------------
+#
+# P6-J1 fixed every call site that used to *read* a blended mean. It left the blend
+# itself computable: `case_stats(case, [">1 metric"]).mean` still averaged them, just
+# with nothing left that asked for it. A correct number nobody happens to read yet is
+# still a bug waiting for its next caller — see this phase's whole reason for existing.
+
+
+def test_case_stats_refuses_to_blend_more_than_one_metric():
+    """mean([1.0, 87.0]) = 44.0 must not be reachable through case_stats at all."""
+    case = _multi_metric_case("c", 1.0, 87.0, True)
+    stats = case_stats(case, ["passed", "confidence"])
+    assert stats.mean is None
+    assert stats.sd == 0.0
+    assert stats.scores == []
+
+
+def test_case_stats_pass_fail_fields_are_unaffected_by_the_refusal():
+    """`passed`/`passes`/`n` come from each run's own `pass`, never from a score —
+    `_bucket_case` relies on exactly this to get a verdict from a multi-metric
+    case_stats() call without needing `.mean`."""
+    case = _multi_metric_case("c", 1.0, 87.0, True)
+    stats = case_stats(case, ["passed", "confidence"])
+    assert stats.passed is True
+    assert stats.passes == 1
+    assert stats.n == 1
+
+
+def test_case_stats_single_metric_is_unaffected():
+    """The common case: one metric in, a real mean out — no behaviour change."""
+    case = _multi_metric_case("c", 1.0, 87.0, True)
+    assert case_stats(case, ["confidence"]).mean == pytest.approx(87.0)
+    assert case_stats(case, []).mean is None
