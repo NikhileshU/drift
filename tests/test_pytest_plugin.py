@@ -94,6 +94,48 @@ def test_scored(record_property):
     assert case["metadata"]["trace_id"] == "abc123"
 
 
+def test_diff_never_blends_passed_with_a_richer_score_on_a_different_scale(eval_repo):
+    """P6-J1: `diffing.case_stats` used to average every metric on a case with no
+    regard for scale. `passed` (0/1) plus a `record_property`-added custom score is
+    the documented, zero-test-changes way to get a richer score — the common shape,
+    not a contrived one — so this runs the real plugin end to end rather than
+    constructing the case dict by hand.
+    """
+    (eval_repo / "tests" / "test_evals.py").write_text('''
+def test_scored(record_property):
+    record_property("drift.score.confidence", 80)
+    record_property("drift.case_id", "scored_case")
+    assert True
+''')
+    commit1 = _init_drift(eval_repo)
+    _run_pytest(eval_repo)
+    assert _snapshot(eval_repo, commit1)["cases"][0]["metric_scores"] == {
+        "passed": 1.0, "confidence": 80.0,
+    }
+
+    (eval_repo / "tests" / "test_evals.py").write_text('''
+def test_scored(record_property):
+    record_property("drift.score.confidence", 20)
+    record_property("drift.case_id", "scored_case")
+    assert True
+''')
+    commit2 = _commit(eval_repo, "confidence drops")
+    _run_pytest(eval_repo)
+
+    diff = subprocess.run(
+        [sys.executable, "-m", "getdrift.cli", "diff", commit1, commit2],
+        cwd=eval_repo, capture_output=True, text=True,
+    )
+    # The old bug: mean([1.0, 80]) = 40.5, mean([1.0, 20]) = 10.5. Neither blended
+    # number, nor the blended delta -30.0, may appear anywhere in the output.
+    assert "40.500" not in diff.stdout
+    assert "10.500" not in diff.stdout
+    assert "-30.000" not in diff.stdout
+    # The real, per-metric numbers must be there instead.
+    assert "confidence: 80.000" in diff.stdout
+    assert "20.000" in diff.stdout
+
+
 def test_a_failing_run_is_still_snapshotted(eval_repo):
     """The failures are exactly what the next diff needs to see get fixed."""
     (eval_repo / "tests" / "test_evals.py").write_text("def test_broken():\n    assert False\n")

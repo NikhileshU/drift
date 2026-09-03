@@ -105,6 +105,21 @@ def _cell(value: Optional[float]) -> str:
     return "—" if value is None else f"{value:.3f}"
 
 
+def _metric_line(case: CaseDiff) -> Optional[str]:
+    """A row's per-metric numbers, for a case with more than one metric.
+
+    None for a single-metric case: its one metric's numbers are already the row's
+    own `before`/`after`/`delta` cells, so repeating them here would say nothing new.
+    """
+    if len(case.per_metric) <= 1:
+        return None
+    return "  ".join(
+        f"{m.metric}: {_cell(m.score_before)}→{_cell(m.score_after)} "
+        f"({'—' if m.delta is None else f'{m.delta:+.3f}'})"
+        for m in case.per_metric
+    )
+
+
 def _render(console: Console, bucket: str, cases: List[CaseDiff]) -> None:
     style = BUCKET_STYLE[bucket]
     table = Table(
@@ -131,6 +146,12 @@ def _render(console: Console, bucket: str, cases: List[CaseDiff]) -> None:
             delta,
             style=style,
         )
+        detail = _metric_line(case)
+        if detail:
+            # No single number is comparable across a case's metrics — see
+            # `case_stats`'s docstring — so the row's own cells are left blank (—)
+            # and the real, same-scale numbers are printed per metric underneath.
+            table.add_row(f"  {detail}", "", "", "", "", style="dim")
     console.print(table)
     console.print()
 
@@ -163,6 +184,9 @@ def _flat(console: Console, cases: List[CaseDiff]) -> None:
             _cell(case.score_after),
             "—" if case.delta is None else f"{case.delta:+.3f}",
         )
+        detail = _metric_line(case)
+        if detail:
+            table.add_row(f"  {detail}", "", "", "", "", style="dim")
     console.print(table)
     console.print()
 

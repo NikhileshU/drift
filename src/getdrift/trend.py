@@ -94,7 +94,15 @@ class FlipFlop:
 
 @dataclass
 class CaseTrend:
-    """The full history of one case, with the sequence-level patterns flagged."""
+    """The full history of one case, with the sequence-level patterns flagged.
+
+    `points` and `per_metric` are never both populated. A case with exactly one
+    metric — the common case — uses `points`, unchanged from before per-metric
+    diffing existed. A case with several uses `per_metric` instead: one real,
+    same-scale `TrendPoint` series per metric, because there is no single correct
+    score to put in `points[i].score` for a case whose metrics are on different
+    scales — see `case_stats`'s docstring for why averaging them was wrong.
+    """
 
     case_id: str
     points: List[TrendPoint]
@@ -103,10 +111,19 @@ class CaseTrend:
     #: Snapshots whose manifest could not be read, so they have no `created_at` to
     #: order by. Ordered last, by commit hash, and named so a caller can say so.
     undated: List[str] = field(default_factory=list)
+    #: Populated instead of `points` for a multi-metric case. Keyed by metric name.
+    per_metric: Dict[str, List[TrendPoint]] = field(default_factory=dict)
+    #: Slow drift is score-based, so a multi-metric case gets one verdict per metric
+    #: here instead of the single `slow_drift` above.
+    metric_slow_drift: Dict[str, Optional[SlowDrift]] = field(default_factory=dict)
 
     @property
     def flagged(self) -> bool:
-        return self.slow_drift is not None or self.flip_flop is not None
+        return (
+            self.slow_drift is not None
+            or self.flip_flop is not None
+            or any(drift is not None for drift in self.metric_slow_drift.values())
+        )
 
 
 @dataclass
@@ -296,6 +313,84 @@ def _points_for_case(
     return points
 
 
+def _metrics_of_case(case_id: str, history: Sequence[Snapshot]) -> List[str]:
+    """Every metric this case has carried anywhere in its history, sorted.
+
+    Not just the latest snapshot's metrics: an adapter adding a richer score partway
+    through history must still be seen as "this case has two metrics", not silently
+    treated as single-metric because the union happens to be checked too early.
+    """
+    metrics = set()
+    for snapshot in history:
+        case = _case_of(snapshot, case_id)
+        if case is not None:
+            metrics.update(case["metric_scores"])
+    return sorted(metrics)
+
+
+def _points_for_metric_in_case(
+    case_id: str, metric: str, history: Sequence[Snapshot], threshold: float, noise_sigma: float
+) -> List[TrendPoint]:
+    """One metric's own series for one case — never averaged with the case's other metrics.
+
+    "Present" here means the case carries *this* metric at this snapshot, not merely
+    that the case exists: a case can exist without yet carrying a metric added later,
+    and that snapshot must read as a gap for this metric's series, not as a real score.
+    """
+    points = []
+    for index, snapshot in enumerate(history):
+        case = _case_of(snapshot, case_id)
+        has_metric = case is not None and metric in case["metric_scores"]
+        bucket = None
+        if case is not None and index:
+            bucket = _buckets_between(
+                history[index - 1], snapshot, threshold, noise_sigma
+            ).get(case_id)
+        stats = case_stats(case, [metric]) if has_metric else None
+        points.append(
+            TrendPoint(
+                commit_hash=snapshot.commit_hash,
+                created_at=(snapshot.manifest or {}).get("created_at"),
+                score=stats.mean if stats else None,
+                passed=stats.passed if stats else None,
+                bucket=bucket,
+                present=has_metric,
+            )
+        )
+    return points
+
+
+def _passfail_points(
+    case_id: str, history: Sequence[Snapshot], threshold: float, noise_sigma: float
+) -> List[TrendPoint]:
+    """Pass/fail and verdict per snapshot, with no score.
+
+    Used only to feed flip-flop detection for a multi-metric case: flip-flopping is a
+    property of the harness's own pass/fail, which — like `.passed` on `CaseStats` — does
+    not depend on any metric's score, so it needs no per-metric split of its own.
+    """
+    points = []
+    for index, snapshot in enumerate(history):
+        case = _case_of(snapshot, case_id)
+        bucket = None
+        if case is not None and index:
+            bucket = _buckets_between(
+                history[index - 1], snapshot, threshold, noise_sigma
+            ).get(case_id)
+        stats = case_stats(case, []) if case is not None else None
+        points.append(
+            TrendPoint(
+                commit_hash=snapshot.commit_hash,
+                created_at=(snapshot.manifest or {}).get("created_at"),
+                score=None,
+                passed=stats.passed if stats else None,
+                bucket=bucket,
+                present=case is not None,
+            )
+        )
+    return points
+
+
 def case_trend(
     case_id: str,
     history: Optional[Sequence[Snapshot]] = None,
@@ -307,8 +402,32 @@ def case_trend(
 
     `history` is accepted so callers — and tests — can supply snapshots directly
     instead of going through the filesystem.
+
+    A case carrying more than one metric gets `per_metric` instead of `points` — see
+    `CaseTrend`'s docstring for why blending them was wrong. `flip_flop` still comes
+    from a single series either way, because it reads only `.passed`, which is the
+    same value regardless of which metric (or how many) you compute it through.
     """
     snapshots = list(history) if history is not None else load_history(drift)
+    metrics = _metrics_of_case(case_id, snapshots)
+
+    if len(metrics) > 1:
+        per_metric = {
+            m: _points_for_metric_in_case(case_id, m, snapshots, threshold, noise_sigma)
+            for m in metrics
+        }
+        passfail = _passfail_points(case_id, snapshots, threshold, noise_sigma)
+        return CaseTrend(
+            case_id=case_id,
+            points=[],
+            per_metric=per_metric,
+            metric_slow_drift={
+                m: _detect_slow_drift(pts, threshold) for m, pts in per_metric.items()
+            },
+            flip_flop=_detect_flip_flop(passfail),
+            undated=_undated(snapshots),
+        )
+
     points = _points_for_case(case_id, snapshots, threshold, noise_sigma)
     return CaseTrend(
         case_id=case_id,

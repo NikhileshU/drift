@@ -117,7 +117,19 @@ def _flags(console: Console, trend) -> None:
             f"alternate between passing and failing: {', '.join(unstable)}. Averaging "
             f"hides that, so they are named individually.[/{FLAG_STYLE}]"
         )
-    if drift is None and flip is None and not unstable:
+    metric_drifts = {
+        m: d for m, d in getattr(trend, "metric_slow_drift", {}).items() if d is not None
+    }
+    for metric, metric_drift in sorted(metric_drifts.items()):
+        console.print(
+            f"[{FLAG_STYLE}]SLOW DRIFT ({metric}) — declined across "
+            f"{metric_drift.snapshots} consecutive snapshots, "
+            f"{metric_drift.first_score:.3f} → {metric_drift.last_score:.3f} "
+            f"(total −{metric_drift.total_drop:.3f}), without any single step being "
+            f"called a regression. {metric_drift.start_commit[:12]} → "
+            f"{metric_drift.end_commit[:12]}.[/{FLAG_STYLE}]"
+        )
+    if drift is None and flip is None and not unstable and not metric_drifts:
         console.print("[dim]No slow drift or flip-flopping detected.[/dim]")
 
 
@@ -181,20 +193,40 @@ def trend(
         label, show_pass = f"metric {metric}", False
 
     console = Console(highlight=False)
-    present = sum(1 for p in result.points if p.present)
+    per_metric = getattr(result, "per_metric", None)
+    if per_metric:
+        present = sum(1 for pts in per_metric.values() for p in pts if p.present)
+    else:
+        present = sum(1 for p in result.points if p.present)
     if not present:
         fail(
             f"{label} does not appear in any of the {len(history)} snapshots. "
             "`drift diff` between two of them to see what case_ids exist."
         )
 
-    console.print(
-        f"\n[bold]{label}[/bold]  [dim]{present} of {len(history)} snapshots"
-        f"[/dim]  {_sparkline(result.points)}\n"
-    )
+    if per_metric:
+        # No single series is comparable across this case's metrics — see
+        # `case_stats`'s docstring — so there is no one sparkline for the header;
+        # each metric gets its own table and its own sparkline below instead.
+        console.print(
+            f"\n[bold]{label}[/bold]  [dim]{present} metric-snapshot(s) across "
+            f"{len(per_metric)} metrics[/dim]\n"
+        )
+    else:
+        console.print(
+            f"\n[bold]{label}[/bold]  [dim]{present} of {len(history)} snapshots"
+            f"[/dim]  {_sparkline(result.points)}\n"
+        )
     _flags(console, result)
     console.print()
-    console.print(_table(result.points, show_pass))
+    if per_metric:
+        for metric in sorted(per_metric):
+            pts = per_metric[metric]
+            console.print(f"[bold]{metric}[/bold]  {_sparkline(pts)}")
+            console.print(_table(pts, show_pass=True))
+            console.print()
+    else:
+        console.print(_table(result.points, show_pass))
 
     if result.undated:
         console.print(
