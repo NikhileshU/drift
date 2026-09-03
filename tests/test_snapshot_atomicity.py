@@ -42,7 +42,7 @@ def test_target_directory_never_exists_mid_write(git_repo, monkeypatch):
 def test_temp_dir_does_not_survive_a_write_failure(git_repo, monkeypatch):
     """Boundary: the temp directory must never outlive a failed write."""
     _init(git_repo)
-    snapshots_dir = drift_dir() / "snapshots"
+    base = drift_dir()
 
     calls = {"n": 0}
     real_write_text = Path.write_text
@@ -57,8 +57,42 @@ def test_temp_dir_does_not_survive_a_write_failure(git_repo, monkeypatch):
     with pytest.raises(OSError):
         create_snapshot(DEMO / "baseline.json")
 
-    leftovers = list(snapshots_dir.iterdir()) if snapshots_dir.is_dir() else []
-    assert leftovers == []
+    for name in ("snapshots", ".tmp"):
+        d = base / name
+        leftovers = list(d.iterdir()) if d.is_dir() else []
+        assert leftovers == [], f"{name}/ has leftovers: {leftovers}"
+
+
+def test_orphaned_temp_dir_is_invisible_to_history(git_repo):
+    """The gap god caught: a fully-written but unpublished temp dir (the permanent
+    window — a crash before os.replace, never reaching the `except OSError` cleanup)
+    must not read as a real snapshot to load_history() / `drift log`."""
+    from getdrift.trend import load_history
+
+    _init(git_repo)
+    real = create_snapshot(DEMO / "baseline.json")
+
+    # Simulate the crash window: a temp dir that finished writing but never got
+    # os.replace'd into snapshots/. Old bug: this lived inside snapshots/ itself,
+    # so load_history's iterdir() found it and load_snapshot loaded it under its
+    # directory name as a fake commit hash.
+    orphan = drift_dir() / ".tmp" / "orphan-9f8e7d"
+    orphan.mkdir(parents=True)
+    (orphan / "results.json").write_text((real.path / "results.json").read_text())
+    (orphan / "manifest.json").write_text((real.path / "manifest.json").read_text())
+
+    history = load_history()
+    assert [s.commit_hash for s in history] == [real.commit_hash]
+
+    # Belt and braces: even if a stray directory ends up inside snapshots/ itself
+    # (a manual copy, editor cruft, anything not our own tmp handling), the name
+    # filter must still refuse it — this is the real fix, the .tmp/ move is a
+    # second line of defence, not a substitute for it.
+    junk = drift_dir() / "snapshots" / "not-a-commit-hash"
+    junk.mkdir()
+    (junk / "results.json").write_text((real.path / "results.json").read_text())
+    history = load_history()
+    assert [s.commit_hash for s in history] == [real.commit_hash]
 
 
 def test_same_commit_collision_still_fails_loudly(git_repo):

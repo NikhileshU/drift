@@ -203,10 +203,13 @@ def test_history_is_ordered_by_created_at_not_by_directory_name(tmp_path):
     """Commit hashes have no order, so writing them out of order must not matter."""
     import json
 
+    # P6-D1: load_history now only accepts real 40-char-hex commit hashes as snapshot
+    # directory names (a stray temp dir must not read as a snapshot) — "aaa"/"bbb"/
+    # "ccc" no longer qualify, so the fixture uses hash-shaped names instead.
     snapshots = tmp_path / "snapshots"
-    for name, created in (("ccc", "2026-09-01T00:00:00Z"),
-                          ("aaa", "2026-09-03T00:00:00Z"),
-                          ("bbb", "2026-09-02T00:00:00Z")):
+    for name, created in (("c" * 40, "2026-09-01T00:00:00Z"),
+                          ("a" * 40, "2026-09-03T00:00:00Z"),
+                          ("b" * 40, "2026-09-02T00:00:00Z")):
         directory = snapshots / name
         directory.mkdir(parents=True)
         (directory / "results.json").write_text(json.dumps({
@@ -215,15 +218,17 @@ def test_history_is_ordered_by_created_at_not_by_directory_name(tmp_path):
                        "environment": "golden_set", "timestamp": created}],
         }))
         (directory / "manifest.json").write_text(json.dumps({"created_at": created}))
-    assert [s.commit_hash for s in load_history(tmp_path)] == ["ccc", "bbb", "aaa"]
+    assert [s.commit_hash for s in load_history(tmp_path)] == ["c" * 40, "b" * 40, "a" * 40]
 
 
 def test_a_snapshot_without_a_manifest_sorts_last_and_is_named(tmp_path):
     """It has no timestamp to order by; dropping it silently would hide a snapshot."""
     import json
 
+    # P6-D1: directory names must be real commit hashes now — see the comment in
+    # test_history_is_ordered_by_created_at_not_by_directory_name above.
     snapshots = tmp_path / "snapshots"
-    for name, created in (("bbb", "2026-09-02T00:00:00Z"), ("aaa", None)):
+    for name, created in (("b" * 40, "2026-09-02T00:00:00Z"), ("a" * 40, None)):
         directory = snapshots / name
         directory.mkdir(parents=True)
         (directory / "results.json").write_text(json.dumps({
@@ -233,8 +238,8 @@ def test_a_snapshot_without_a_manifest_sorts_last_and_is_named(tmp_path):
         }))
         if created:
             (directory / "manifest.json").write_text(json.dumps({"created_at": created}))
-    assert [s.commit_hash for s in load_history(tmp_path)] == ["bbb", "aaa"]
-    assert case_trend("c", drift=tmp_path).undated == ["aaa"]
+    assert [s.commit_hash for s in load_history(tmp_path)] == ["b" * 40, "a" * 40]
+    assert case_trend("c", drift=tmp_path).undated == ["a" * 40]
 
 
 def test_no_snapshots_directory_is_an_empty_history_not_a_crash(tmp_path):

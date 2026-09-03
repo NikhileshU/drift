@@ -250,14 +250,21 @@ def create_snapshot(
             "`metadata` object must be JSON-native (str, number, bool, null, list, dict)."
         ) from exc
 
-    # Build off to the side, under the commit's own name so a crash leaves a
-    # recognisable ".tmp-<commit>-*" orphan rather than an anonymous one, then publish
-    # with a single os.replace. That is what makes the snapshot appear atomically: a
-    # concurrent reader (a parallel CI runner, `drift log`, load_history()) either
-    # doesn't see `target` yet or sees it fully written — never a half-built directory.
-    # The temp dir is a sibling of `target` so the replace stays on one filesystem.
+    # Build off to the side, then publish with a single os.replace — that is what
+    # makes the snapshot appear atomically: a concurrent reader (a parallel CI runner,
+    # `drift log`, load_history()) either doesn't see `target` yet or sees it fully
+    # written, never a half-built directory. The temp dir lives in a sibling
+    # `.tmp/`, not inside `snapshots/` itself: a completed-but-unpublished temp dir
+    # has a real results.json and would otherwise be indistinguishable from a
+    # snapshot to anything that scans `snapshots/` (a crash before the replace — a
+    # SIGKILL, a lost runner — never reaches the `except OSError` cleanup below, so
+    # that orphan can outlive this process). `.tmp/` still sits under `target`'s
+    # parent's parent, i.e. still inside `base`, so the replace stays on one
+    # filesystem.
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = Path(tempfile.mkdtemp(prefix=f".tmp-{commit}-", dir=target.parent))
+    tmp_root = target.parent.parent / ".tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"{commit}-", dir=tmp_root))
     try:
         for name, text in payload:
             (tmp_dir / name).write_text(text, encoding="utf-8")

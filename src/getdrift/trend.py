@@ -19,6 +19,7 @@ print for that pair, computed by the same code. A second implementation would ev
 disagree with the first, and a trend that contradicts the diff is worse than no trend.
 """
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,14 @@ from getdrift.diffing import (
 )
 from getdrift.paths import drift_dir
 from getdrift.snapshot import Snapshot, load_snapshot
+
+#: A snapshot directory is named by its full commit hash, always. Anything else under
+#: `snapshots/` — a stray temp dir from an interrupted write, a manual `-backup` copy,
+#: OS/editor cruft — is not a snapshot, even if it happens to contain a readable
+#: results.json. Filtering by name here, in the one function every caller (`drift log`,
+#: `drift trend`, CI) routes through, is a smaller fix than teaching every scanner of
+#: `snapshots/` to recognise junk on its own.
+_COMMIT_HASH = re.compile(r"[0-9a-f]{40}")
 
 #: Consecutive declining snapshots before a slow drift is worth reporting. Three points
 #: is two steps: the smallest sequence that is a trend rather than a single change.
@@ -156,7 +165,7 @@ def load_history(drift: Optional[Path] = None) -> List[Snapshot]:
         return []
     loaded = []
     for path in snapshots.iterdir():
-        if not path.is_dir():
+        if not path.is_dir() or not _COMMIT_HASH.fullmatch(path.name):
             continue
         try:
             loaded.append(load_snapshot(path.name, base))
