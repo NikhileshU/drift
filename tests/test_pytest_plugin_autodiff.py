@@ -21,7 +21,12 @@ from pathlib import Path
 import pytest
 
 from getdrift.diffing import CaseDiff, Comparability
-from getdrift.pytest_plugin import _auto_diff_enabled, _auto_diff_lines
+from getdrift.pytest_plugin import (
+    _auto_diff_enabled,
+    _auto_diff_lines,
+    _auto_export_enabled,
+    _config_bool,
+)
 
 
 # --- pure unit tests: config/env plumbing --------------------------------------
@@ -37,6 +42,16 @@ def test_config_auto_diff_false_disables_it(tmp_path, monkeypatch):
     assert _auto_diff_enabled(None, tmp_path) is False
 
 
+def test_config_auto_diff_quoted_false_string_also_disables_it(tmp_path, monkeypatch):
+    """P8-A1: `_config_bool` — a YAML string `"false"` used to be treated as truthy
+    (`"false" is not False`), so this opt-out silently did nothing. `auto_diff` is
+    display-only, but the identical bug in `_auto_export_enabled` (below) means a
+    user believing they had turned off disk writes had not."""
+    monkeypatch.delenv("DRIFT_AUTO_DIFF", raising=False)
+    (tmp_path / "config.yaml").write_text('auto_diff: "false"\n')
+    assert _auto_diff_enabled(None, tmp_path) is False
+
+
 def test_env_zero_disables_even_when_config_says_true(tmp_path, monkeypatch):
     (tmp_path / "config.yaml").write_text("auto_diff: true\n")
     monkeypatch.setenv("DRIFT_AUTO_DIFF", "0")
@@ -48,6 +63,53 @@ def test_env_wins_over_config_false_too(tmp_path, monkeypatch):
     (tmp_path / "config.yaml").write_text("auto_diff: false\n")
     monkeypatch.setenv("DRIFT_AUTO_DIFF", "1")
     assert _auto_diff_enabled(None, tmp_path) is True
+
+
+def test_auto_export_defaults_on_with_no_config(tmp_path):
+    assert _auto_export_enabled(tmp_path) is True
+
+
+def test_auto_export_real_bool_false_disables_it(tmp_path):
+    (tmp_path / "config.yaml").write_text("auto_export: false\n")
+    assert _auto_export_enabled(tmp_path) is False
+
+
+def test_auto_export_quoted_false_string_also_disables_it(tmp_path):
+    """P8-A1: the actual bug this guards, not just `_auto_diff_enabled`'s copy of it
+    — `auto_export` gates writing files to disk on every test run, unlike `auto_diff`
+    which only prints. `is not False` treated the YAML string `"false"` as enabled;
+    `write_reports` then ran anyway even though the user believed they had opted out."""
+    (tmp_path / "config.yaml").write_text('auto_export: "false"\n')
+    assert _auto_export_enabled(tmp_path) is False
+
+
+@pytest.mark.parametrize("spelling", ["false", "False", "FALSE", "no", "off", "0", " false "])
+def test_config_bool_recognises_every_falsy_spelling(spelling):
+    assert _config_bool(spelling, default=True) is False
+
+
+@pytest.mark.parametrize("value", ["true", "yes", "on", "1", "anything-else"])
+def test_config_bool_treats_other_strings_as_truthy(value):
+    assert _config_bool(value, default=False) is True
+
+
+def test_config_bool_passes_a_real_bool_through_unchanged():
+    assert _config_bool(True, default=False) is True
+    assert _config_bool(False, default=True) is False
+
+
+def test_config_bool_falls_back_to_default_when_key_is_absent():
+    assert _config_bool(None, default=True) is True
+    assert _config_bool(None, default=False) is False
+
+
+def test_config_bool_coerces_an_unexpected_type_rather_than_raising():
+    """P8-A1 brief: 'export_formats and auto_* keys receiving unexpected types rather
+    than bools' — a list or an int must not crash config resolution."""
+    assert _config_bool(0, default=True) is False
+    assert _config_bool(1, default=False) is True
+    assert _config_bool([], default=True) is False
+    assert _config_bool(["golden_set"], default=False) is True
 
 
 # --- pure unit tests: the compact terminal block --------------------------------

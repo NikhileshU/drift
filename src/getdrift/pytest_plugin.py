@@ -257,17 +257,43 @@ AUTO_DIFF_ENV = "DRIFT_AUTO_DIFF"
 NAMED_BUCKETS = {"Fixed", "Regressed", "Degraded", "New"}
 
 
+_FALSY_STRINGS = {"false", "no", "off", "0"}
+
+
+def _config_bool(value: Any, default: bool) -> bool:
+    """A config.yaml value the way `_judge_version_required` (snapshot.py) already
+    treats one, so the two safety toggles do not quietly disagree on what "off" means.
+
+    `auto_export`/`auto_diff` write files or print, respectively, on every test run by
+    default — a user turning either off is relying on that opt-out actually working.
+    `value is not False` (the check this replaced) only catches a real YAML bool;
+    `auto_export: "false"` — a quoted string, easy to type by habit or via templating
+    — parses to the Python string `"false"`, and `"false" is not False` is `True`:
+    the toggle silently stays on. `None` (key absent) falls through to `default`;
+    anything else that is not a recognised string falls through to a plain `bool()`,
+    so `auto_export: 0` or `auto_export: []` still read as off rather than raising.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSY_STRINGS
+    return bool(value)
+
+
 def _auto_diff_enabled(config, drift: Path) -> bool:
     """Env wins over config; config's own default is on.
 
     `DRIFT_AUTO_DIFF=0` disables regardless of config.yaml. Any other env value, or
     no env var at all, falls through to `auto_diff` in config.yaml, which defaults to
-    on — only an explicit `auto_diff: false` turns it off.
+    on — only an explicit `auto_diff: false` (or a quoted `"false"`/`"no"`/`"off"`/
+    `"0"` — see `_config_bool`) turns it off.
     """
     env = os.environ.get(AUTO_DIFF_ENV)
     if env is not None:
         return env.strip() != "0"
-    return read_config(drift).get("auto_diff", True) is not False
+    return _config_bool(read_config(drift).get("auto_diff"), default=True)
 
 
 def _names(cases: List[CaseDiff]) -> str:
@@ -375,7 +401,7 @@ AUTO_EXPORT_CONFIG_KEY = "auto_export"
 
 
 def _auto_export_enabled(drift: Path) -> bool:
-    return read_config(drift).get(AUTO_EXPORT_CONFIG_KEY, True) is not False
+    return _config_bool(read_config(drift).get(AUTO_EXPORT_CONFIG_KEY), default=True)
 
 
 def _write_reports(

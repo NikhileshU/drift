@@ -29,6 +29,52 @@ from getdrift.paths import drift_dir
 REPORTS_DIRNAME = "reports"
 
 
+class ReportWriteError(RuntimeError):
+    """A report path would not resolve safely inside `.drift/reports/` — refused
+    rather than followed. See `_require_contained` for the two ways this happens.
+    """
+
+
+def _require_contained(path: Path, root: Path) -> None:
+    """Refuse to write through `path` unless it stays inside `root`.
+
+    Two attacker-reachable ways it would not, both starting from the same root cause:
+    `write_reports` builds filenames by string-formatting `created_at` and
+    `candidate_hash` (see `_archive_name`) straight from data that ultimately comes
+    off disk — a snapshot's own commit-hash directory name and manifest, which a
+    malicious repo can author. Neither is sanitised before reaching a filesystem path:
+
+    1. Path injection: if either value contains `/`, `..`, or is itself absolute
+       (`created_at = "/etc/cron.d/evil"`), the constructed name is no longer a single
+       path segment, and joining it onto `root` can land anywhere the process can
+       write — proven with `write_reports(..., created_at="/tmp/pwned", ...)`, which
+       writes outside `.drift/reports/` entirely rather than raising.
+    2. Symlink following: `.drift/reports` (or a file inside it, e.g. `latest.json`)
+       can be a symlink checked into the repo — git commits symlinks natively — and
+       `auto_export` defaults ON, so a `pytest` run in a clone of such a repo would
+       silently write wherever that symlink points, no `drift` CLI invocation needed.
+
+    `is_symlink()` catches #2 without following it (a symlink to a target that does
+    not exist would pass a plain `exists()` check but must still be refused).
+    `resolve()` catches #1 by normalising `..`/absolute components, then checking the
+    result is still `root`'s own child — this also transitively re-catches #2 for any
+    symlink among `path`'s parent components, not just `path` itself.
+    """
+    if path.is_symlink():
+        raise ReportWriteError(
+            f"{path} is a symlink — refusing to write through it. A repo may have "
+            "shipped a symlink where Drift expects a real file or directory; remove "
+            "it and re-run."
+        )
+    resolved_root = root.resolve()
+    if path.resolve().parent != resolved_root:
+        raise ReportWriteError(
+            f"refusing to write {path} — it would land outside {resolved_root}. "
+            "This usually means a snapshot's commit hash or created_at timestamp "
+            "contains a path separator or '..'; both should be plain identifiers."
+        )
+
+
 def _timestamp_slug(created_at: str) -> str:
     """`created_at` with `:` and `.` stripped, so a directory listing sorts
     chronologically and every character is filesystem-safe. `created_at` is already
@@ -268,6 +314,7 @@ def write_reports(
         raise ValueError(f"unknown report format(s): {', '.join(unknown)} (want json, md)")
 
     reports_dir = (drift if drift is not None else drift_dir()) / REPORTS_DIRNAME
+    _require_contained(reports_dir, reports_dir.parent)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     written: List[Path] = []
@@ -276,10 +323,12 @@ def write_reports(
         content = render(diffs, comparability, baseline_hash, candidate_hash, created_at, removed)
 
         latest = reports_dir / f"latest.{ext}"
+        _require_contained(latest, reports_dir)
         latest.write_text(content, encoding="utf-8")
         written.append(latest)
 
         archive = reports_dir / _archive_name(created_at, candidate_hash, ext)
+        _require_contained(archive, reports_dir)
         if not archive.exists():
             archive.write_text(content, encoding="utf-8")
         written.append(archive)
