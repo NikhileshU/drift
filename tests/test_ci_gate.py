@@ -280,3 +280,66 @@ def test_a_new_failing_case_is_not_smuggled_past_the_gate(git_repo):
     assert "New (1)" in result.output
     assert "brand_new_and_broken" in result.output
     assert result.exit_code == 0, result.output
+
+
+# --- P6-A4: same case_id, different environment, across the two snapshots ---------
+
+
+def _single_case(case_id, environment, score, passed):
+    return {
+        "schema_version": "1.1.0",
+        "cases": [{
+            "case_id": case_id,
+            "metric_scores": {"answer_correctness": score},
+            "pass": passed,
+            "environment": environment,
+            "timestamp": "2026-09-01T09:00:00Z",
+        }],
+    }
+
+
+def test_cross_environment_collision_fails_the_gate_unflagged(git_repo):
+    """P6-M1 ruling: an unflagged collision fails the build. A green build asserts
+    every case was checked, and a case compared across two environments was not —
+    the same 'we know these are not comparable' category a judge-version MISMATCH
+    already blocks on, just per-case instead of per-snapshot. The case is still
+    reported with its real numbers (SUPPRESSED:, not a bare bucket count) — a case
+    the gate refuses to certify must not also become invisible."""
+    baseline = _single_case("c", "golden_set", 1.0, True)
+    candidate = _single_case("c", "production_sample", 0.2, False)
+    first, second = _pair(git_repo, candidate, baseline=baseline)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 1, result.output
+    assert "FAIL" in result.output
+    assert "PASS" not in result.output
+    assert "SUPPRESSED:" in result.output
+    assert "golden_set" in result.output and "production_sample" in result.output
+    assert "--environment" in result.output  # the failure names its own fix
+
+
+def test_environment_flag_on_the_gate_narrows_before_matching(git_repo):
+    baseline = {
+        "schema_version": "1.1.0",
+        "cases": [
+            {"case_id": "c", "metric_scores": {"answer_correctness": 1.0}, "pass": True,
+             "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+            {"case_id": "stable", "metric_scores": {"answer_correctness": 0.5}, "pass": True,
+             "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+        ],
+    }
+    candidate = {
+        "schema_version": "1.1.0",
+        "cases": [
+            {"case_id": "c", "metric_scores": {"answer_correctness": 0.2}, "pass": False,
+             "environment": "production_sample", "timestamp": "2026-09-01T09:00:00Z"},
+            {"case_id": "stable", "metric_scores": {"answer_correctness": 0.5}, "pass": True,
+             "environment": "golden_set", "timestamp": "2026-09-01T09:00:00Z"},
+        ],
+    }
+    first, second = _pair(git_repo, candidate, baseline=baseline)
+    result = runner.invoke(
+        app, ["ci", "--baseline", first, "--current", second, "--environment", "golden_set"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "SUPPRESSED:" not in result.output
+    assert "PASS" in result.output

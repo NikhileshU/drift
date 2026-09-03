@@ -6,6 +6,7 @@ thresholds — without going through the CLI.
 
 import statistics
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from getdrift.schema import PLACEHOLDER
@@ -34,6 +35,43 @@ EQUAL, MISMATCH, UNKNOWN = "equal", "mismatch", "unknown"
 
 #: Display order. Regressed leads because it is the one that stops a release.
 BUCKET_ORDER = ["Regressed", "Degraded", "Fixed", "Improved", "New", "Unchanged"]
+
+#: A case's `bucket` when the same case_id was scored under two different
+#: `environment`s in `before` and `after` — golden_set in one, production_sample in
+#: the other. Deliberately not in BUCKET_ORDER: a verdict comparing two different
+#: kinds of input is not a verdict about the model, so none of the six is assigned.
+#: Every loop that renders BUCKET_ORDER skips a case with this bucket automatically;
+#: the caller is responsible for finding and reporting these separately, the same as
+#: it already does for "removed" cases.
+ENVIRONMENT_MISMATCH = "EnvironmentMismatch"
+
+
+class Environment(str, Enum):
+    """The two values `results.json` allows for a case's `environment` field.
+
+    Kept here rather than duplicated as string literals in every CLI that adds
+    `--environment` — `drift diff`, `drift ci`, `drift trend` all import this one.
+    """
+
+    golden_set = "golden_set"
+    production_sample = "production_sample"
+
+
+def filter_environment(
+    results: Dict[str, Any], environment: Optional[str]
+) -> Dict[str, Any]:
+    """`results` with only cases from `environment`, or `results` unchanged if None.
+
+    Applied before case_index / compare() ever see the cases: filtering out one
+    environment also removes it as a source of cross-environment case_id collisions,
+    which is the whole point of `--environment`.
+    """
+    if environment is None:
+        return results
+    return {
+        **results,
+        "cases": [c for c in results.get("cases", []) if c.get("environment") == environment],
+    }
 
 
 @dataclass
@@ -191,6 +229,10 @@ class CaseDiff:
     #: for the single-metric case (where it duplicates the top-level fields) — one
     #: place to read a case's numbers from, whether it carries one metric or several.
     per_metric: List[MetricDiff] = field(default_factory=list)
+    #: The case's recorded `environment` in each snapshot. Always populated; only
+    #: relevant when they differ, which is when `bucket == ENVIRONMENT_MISMATCH`.
+    environment_before: Optional[str] = None
+    environment_after: Optional[str] = None
 
 
 def _mean(values: List[float]) -> float:
@@ -326,6 +368,30 @@ def _metric_diff(
     )
 
 
+def _metric_diff_no_verdict(
+    before: Dict[str, Any], after: Dict[str, Any], metric: str
+) -> MetricDiff:
+    """One metric's own before/after numbers with no verdict.
+
+    Used only for an ENVIRONMENT_MISMATCH case: the numbers are real — this metric
+    compared only to itself is dimensionally fine regardless of environment — but
+    nothing they might otherwise justify (Improved/Degraded/Unchanged, a noise floor)
+    applies, because the two sides were never a valid comparison to begin with.
+    """
+    old_m, new_m = case_stats(before, [metric]), case_stats(after, [metric])
+    delta = None if old_m.mean is None or new_m.mean is None else new_m.mean - old_m.mean
+    return MetricDiff(
+        metric=metric,
+        score_before=old_m.mean,
+        score_after=new_m.mean,
+        delta=delta,
+        sd_before=old_m.sd,
+        sd_after=new_m.sd,
+        noise_floor=0.0,
+        bucket=ENVIRONMENT_MISMATCH,
+    )
+
+
 def _bucket_case(
     before: Optional[Dict[str, Any]],
     after: Dict[str, Any],
@@ -361,6 +427,7 @@ def _bucket_case(
             sd_after=solo.sd_after if solo else 0.0,
             runs_after=fresh.n,
             per_metric=per_metric,
+            environment_after=after.get("environment"),
         )
 
     # Only metrics present in both runs are comparable; a metric added or dropped
@@ -371,6 +438,34 @@ def _bucket_case(
     # answer. Kept here, once, rather than inside the per-metric loop.
     old, new = case_stats(before, shared), case_stats(after, shared)
     was, now = old.passed, new.passed
+
+    env_before, env_after = before.get("environment"), after.get("environment")
+    if env_before is not None and env_after is not None and env_before != env_after:
+        # Same case_id, same as any other match — but scored in different
+        # environments, so a delta between them is not evidence about the model. The
+        # same reasoning as a judge-version MISMATCH, applied per case instead of to
+        # the whole snapshot: report the real numbers, assign no bucket, and skip
+        # per-metric verdict math entirely — there is no valid comparison here for any
+        # metric to be Improved/Degraded/Unchanged about.
+        per_metric = [_metric_diff_no_verdict(before, after, m) for m in shared]
+        solo = per_metric[0] if len(per_metric) == 1 else None
+        return CaseDiff(
+            case_id=after["case_id"],
+            bucket=ENVIRONMENT_MISMATCH,
+            pass_before=was,
+            pass_after=now,
+            score_before=solo.score_before if solo else None,
+            score_after=solo.score_after if solo else None,
+            delta=solo.delta if solo else None,
+            shared_metrics=shared,
+            sd_before=solo.sd_before if solo else 0.0,
+            sd_after=solo.sd_after if solo else 0.0,
+            runs_before=old.n,
+            runs_after=new.n,
+            environment_before=env_before,
+            environment_after=env_after,
+            per_metric=per_metric,
+        )
 
     per_metric = [
         _metric_diff(before, after, m, threshold, noise_sigma, was, now) for m in shared
@@ -402,6 +497,8 @@ def _bucket_case(
         noise_floor=solo.noise_floor if solo else 0.0,
         noise_filtered=any(d.noise_filtered for d in per_metric),
         pass_flip_filtered=(before["pass"] != after["pass"]) and was == now,
+        environment_before=env_before,
+        environment_after=env_after,
         per_metric=per_metric,
     )
 
@@ -422,6 +519,12 @@ def compare(
     the same case run in two `environment`s. Silently keeping one and dropping the
     other is not a fixable-later ambiguity, so both `before` and `after` are checked,
     not just the one the old code happened to build a dict from.
+
+    A case matched by `case_id` across the two snapshots but scored under different
+    `environment`s gets `bucket == ENVIRONMENT_MISMATCH` instead of one of the six —
+    a different problem from the duplicate above (one case_id, two valid snapshots,
+    an invalid comparison), and not something `--environment` narrows away on its own
+    unless the caller applies `filter_environment` to both sides first.
     """
     prior = case_index(before["cases"])
     current = case_index(after["cases"])

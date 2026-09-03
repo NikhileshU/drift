@@ -148,3 +148,75 @@ def test_a_successful_trend_exits_zero(git_repo):
     _history(git_repo)
     assert runner.invoke(app, ["trend", "drifting"]).exit_code == 0
     assert runner.invoke(app, ["trend", "flaky"]).exit_code == 0
+
+
+# --- P6-A4: --environment filters every snapshot before the history is walked -----
+
+
+def test_environment_flag_narrows_the_history(git_repo):
+    """Case "c" is golden_set in snapshots 0 and 2, but production_sample in
+    snapshot 1 — one valid instance per snapshot, so this is the P6-A4 collision,
+    not the P6-A1 within-run duplicate. Without the flag, the two steps touching
+    snapshot 1 read as EnvironmentMismatch rather than a real verdict; with it,
+    snapshot 1 has no golden_set case at all and the case is simply absent there."""
+    runner.invoke(app, ["init"])
+    environments = ["golden_set", "production_sample", "golden_set"]
+    for index, environment in enumerate(environments):
+        (git_repo / "results.json").write_text(json.dumps({
+            "schema_version": "1.1.0",
+            "cases": [{
+                "case_id": "c", "metric_scores": {"accuracy": 0.9}, "pass": True,
+                "environment": environment, "timestamp": "2026-09-01T09:00:00Z",
+            }],
+        }))
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", f"c{index}"],
+                       cwd=git_repo, check=True)
+        assert runner.invoke(
+            app, ["snapshot", "--results-file", str(git_repo / "results.json"),
+                  "--judge-version", "v1"]
+        ).exit_code == 0
+
+    unflagged = runner.invoke(app, ["trend", "c"])
+    assert unflagged.exit_code == 0
+    assert "SUPPRESSED:" in unflagged.output
+    assert "no verdict" in unflagged.output
+    assert "Regressed" not in unflagged.output and "Degraded" not in unflagged.output
+
+    flagged = runner.invoke(app, ["trend", "c", "--environment", "golden_set"])
+    assert flagged.exit_code == 0
+    assert "SUPPRESSED:" not in flagged.output
+    assert "no verdict" not in flagged.output
+    assert "2 of 3 snapshots" in flagged.output  # snapshot 1 has no golden_set case
+
+
+def test_environment_mismatch_note_survives_no_color(git_repo, monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    runner.invoke(app, ["init"])
+    for index, environment in enumerate(["golden_set", "production_sample"]):
+        (git_repo / "results.json").write_text(json.dumps({
+            "schema_version": "1.1.0",
+            "cases": [{
+                "case_id": "c", "metric_scores": {"accuracy": 0.9}, "pass": True,
+                "environment": environment, "timestamp": "2026-09-01T09:00:00Z",
+            }],
+        }))
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", f"c{index}"],
+                       cwd=git_repo, check=True)
+        assert runner.invoke(
+            app, ["snapshot", "--results-file", str(git_repo / "results.json"),
+                  "--judge-version", "v1"]
+        ).exit_code == 0
+
+    output = runner.invoke(app, ["trend", "c"]).output
+    assert "\x1b[" not in output
+    assert "SUPPRESSED:" in output
+
+
+def test_environment_flag_does_not_affect_a_single_environment_history(git_repo):
+    """Regression pin: a history that only ever uses one environment must trend
+    identically with or without the flag."""
+    _history(git_repo)
+    plain = runner.invoke(app, ["trend", "drifting"])
+    flagged = runner.invoke(app, ["trend", "drifting", "--environment", "golden_set"])
+    assert plain.output == flagged.output
