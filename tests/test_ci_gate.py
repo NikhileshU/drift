@@ -87,6 +87,26 @@ def test_a_judge_change_blocks_the_build_with_a_clear_reason(git_repo):
     assert "not directly comparable" in result.output.lower()
 
 
+def test_duplicate_case_id_across_environments_fails_loudly_not_silently(git_repo):
+    """P6-A1: `drift snapshot` refuses this at write time; simulate a snapshot written
+    some other way — a legacy file predating that check, or one written outside
+    `drift snapshot` — the only way a duplicate reaches `drift ci` at all."""
+    first, second = _pair(git_repo, CLEAN)
+    results_path = git_repo / ".drift" / "snapshots" / second / "results.json"
+    document = json.loads(results_path.read_text())
+    dup = dict(document["cases"][0])
+    dup["environment"] = (
+        "production_sample" if dup["environment"] == "golden_set" else "golden_set"
+    )
+    document["cases"].append(dup)
+    results_path.write_text(json.dumps(document))
+
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert dup["case_id"] in result.output
+
+
 def test_a_dirty_tree_is_flagged_but_still_gated(git_repo):
     first, second = _pair(git_repo, CLEAN)
     (git_repo / "README.md").write_text("uncommitted\n")

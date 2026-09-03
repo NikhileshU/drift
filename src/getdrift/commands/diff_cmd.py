@@ -15,6 +15,7 @@ from getdrift.diffing import (
     UNKNOWN,
     CaseDiff,
     Comparability,
+    DuplicateCaseIdError,
     compare,
     judge_comparability,
 )
@@ -275,9 +276,12 @@ def diff(
 
     resolved_threshold = _threshold(drift, threshold)
     resolved_sigma = _noise_sigma(drift, noise_sigma)
-    diffs, removed = compare(
-        before.results, after.results, resolved_threshold, resolved_sigma
-    )
+    try:
+        diffs, removed = compare(
+            before.results, after.results, resolved_threshold, resolved_sigma
+        )
+    except DuplicateCaseIdError as exc:
+        fail(exc)
 
     comparability = judge_comparability(before.manifest, after.manifest)
 

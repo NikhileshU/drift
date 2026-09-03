@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from getdrift.diffing import (
     DEFAULT_NOISE_SIGMA,
     DEFAULT_THRESHOLD,
+    case_index,
     case_stats,
     compare,
 )
@@ -184,9 +185,14 @@ def _ordering_key(snapshot: Snapshot, ancestry: Optional[Dict[str, int]] = None)
 
 
 def _case_of(snapshot: Snapshot, case_id: str) -> Optional[Dict[str, Any]]:
-    return next(
-        (c for c in snapshot.results.get("cases", []) if c["case_id"] == case_id), None
-    )
+    """The one case in this snapshot with `case_id`.
+
+    Goes through `case_index` rather than a first-match scan: a `next()` over a
+    duplicate `case_id` would quietly return whichever copy came first and hide the
+    other from the whole trend — the same drop `compare()` used to make, just walked
+    one snapshot at a time. `case_index` raises instead, same as `compare()` does.
+    """
+    return case_index(snapshot.results.get("cases", [])).get(case_id)
 
 
 def _buckets_between(
@@ -333,16 +339,15 @@ def metric_trend(
     snapshots = list(history) if history is not None else load_history(drift)
     points, case_ids = [], set()
     for snapshot in snapshots:
+        # Through case_index rather than a direct scan of `cases`, same as
+        # `_case_of` — a duplicate case_id here used to silently score twice
+        # (once under each copy) and skew the average, instead of the case_id
+        # collision it actually is.
+        cases = case_index(snapshot.results.get("cases", [])).values()
         scoring = [
-            case_stats(case, [metric]).mean
-            for case in snapshot.results.get("cases", [])
-            if metric in case["metric_scores"]
+            case_stats(case, [metric]).mean for case in cases if metric in case["metric_scores"]
         ]
-        case_ids.update(
-            case["case_id"]
-            for case in snapshot.results.get("cases", [])
-            if metric in case["metric_scores"]
-        )
+        case_ids.update(case["case_id"] for case in cases if metric in case["metric_scores"])
         present = [value for value in scoring if value is not None]
         points.append(
             TrendPoint(
