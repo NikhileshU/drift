@@ -119,6 +119,100 @@ def test_the_explicit_two_hash_form_is_unchanged(git_repo):
     assert third[:12] not in result.output.split("threshold")[0]
 
 
+# --- P6-A4: same case_id, different environment, across two snapshots -------------
+
+
+def _case(case_id, environment, score, passed):
+    return {
+        "case_id": case_id,
+        "metric_scores": {"accuracy": score},
+        "pass": passed,
+        "environment": environment,
+        "timestamp": "2026-09-01T09:00:00Z",
+    }
+
+
+def _snapshot_with(repo, cases):
+    doc = {"schema_version": "1.1.0", "cases": cases}
+    path = repo / "r.json"
+    path.write_text(json.dumps(doc))
+    return _snapshot(repo, path)
+
+
+def test_cross_environment_collision_suppresses_and_warns(git_repo):
+    """Verified live on main before this fix: `bucket: Degraded | score 1.0 -> 0.2 |
+    delta -0.8` — a confident verdict comparing golden_set against production_sample."""
+    runner.invoke(app, ["init"])
+    first = _snapshot_with(git_repo, [_case("c", "golden_set", 1.0, True)])
+    (git_repo / "README.md").write_text("v2\n")
+    subprocess.run(["git", "commit", "-aqm", "v2"], cwd=git_repo, check=True)
+    second = _snapshot_with(git_repo, [_case("c", "production_sample", 0.2, False)])
+
+    result = runner.invoke(app, ["diff", first, second])
+    assert result.exit_code == 0
+    assert "Degraded (1)" not in result.output
+    assert "Regressed (1)" not in result.output
+    assert "Degraded 0" in result.output and "Regressed 0" in result.output
+    assert "SUPPRESSED:" in result.output
+    assert "golden_set" in result.output and "production_sample" in result.output
+    assert "c" in result.output  # the case is still named, not silently dropped
+    assert "-0.800" in result.output  # and its real numbers are still shown
+
+
+def test_cross_environment_warning_survives_no_color(git_repo, monkeypatch):
+    """Same discipline as A7a/P4-A3: this must be readable in a CI log."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    runner.invoke(app, ["init"])
+    first = _snapshot_with(git_repo, [_case("c", "golden_set", 1.0, True)])
+    (git_repo / "README.md").write_text("v2\n")
+    subprocess.run(["git", "commit", "-aqm", "v2"], cwd=git_repo, check=True)
+    second = _snapshot_with(git_repo, [_case("c", "production_sample", 0.2, False)])
+
+    output = runner.invoke(app, ["diff", first, second]).output
+    assert "\x1b[" not in output
+    assert "SUPPRESSED:" in output
+
+
+def test_environment_flag_narrows_before_matching(git_repo):
+    """--environment removes the cross-environment case from the comparison entirely
+    (it surfaces as a normal removal, not a suppressed verdict) and leaves an
+    unrelated same-environment case comparing normally."""
+    runner.invoke(app, ["init"])
+    first = _snapshot_with(
+        git_repo,
+        [_case("c", "golden_set", 1.0, True), _case("stable", "golden_set", 0.5, True)],
+    )
+    (git_repo / "README.md").write_text("v2\n")
+    subprocess.run(["git", "commit", "-aqm", "v2"], cwd=git_repo, check=True)
+    second = _snapshot_with(
+        git_repo,
+        [_case("c", "production_sample", 0.2, False), _case("stable", "golden_set", 0.5, True)],
+    )
+
+    result = runner.invoke(app, ["diff", first, second, "--environment", "golden_set"])
+    assert result.exit_code == 0
+    assert "SUPPRESSED:" not in result.output
+    assert "Unchanged (1)" in result.output
+    assert "REMOVED:" in result.output and "c" in result.output.split("REMOVED:")[1]
+
+
+def test_environment_flag_does_not_affect_a_same_environment_comparison(git_repo):
+    """Regression pin: passing --environment for an ordinary same-environment diff
+    must not change a single verdict."""
+    runner.invoke(app, ["init"])
+    first = _snapshot_with(git_repo, [_case("c", "golden_set", 1.0, True)])
+    (git_repo / "README.md").write_text("v2\n")
+    subprocess.run(["git", "commit", "-aqm", "v2"], cwd=git_repo, check=True)
+    second = _snapshot_with(git_repo, [_case("c", "golden_set", 0.2, False)])
+
+    plain = runner.invoke(app, ["diff", first, second])
+    flagged = runner.invoke(app, ["diff", first, second, "--environment", "golden_set"])
+    assert plain.exit_code == flagged.exit_code == 0
+    assert "Regressed (1)" in plain.output and "Regressed (1)" in flagged.output
+    assert "SUPPRESSED:" not in plain.output and "SUPPRESSED:" not in flagged.output
+
+
 # --- P6-A1: a duplicate case_id must refuse loudly, not vanish silently -----------
 
 
