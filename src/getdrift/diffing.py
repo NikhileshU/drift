@@ -45,6 +45,17 @@ BUCKET_ORDER = ["Regressed", "Degraded", "Fixed", "Improved", "New", "Unchanged"
 #: it already does for "removed" cases.
 ENVIRONMENT_MISMATCH = "EnvironmentMismatch"
 
+#: Plain-ASCII prefixes on the notes that report withheld or lost cases. They exist
+#: because colour does not survive a CI log, and these are the lines that must. Distinct
+#: from the lowercase `warning:` used elsewhere: nothing here is wrong, something is
+#: being withheld or has gone missing, and the two deserve different words.
+#:
+#: Live here, not in `commands/diff_cmd.py` where they render, so `report.py` and
+#: `pytest_plugin.py` can reuse them without importing the CLI stack (typer/rich/click)
+#: — this module has none of those dependencies and both callers already import it.
+SUPPRESSED_MARKER = "SUPPRESSED:"
+REMOVED_MARKER = "REMOVED:"
+
 
 class Environment(str, Enum):
     """The two values `results.json` allows for a case's `environment` field.
