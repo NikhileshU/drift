@@ -1,10 +1,12 @@
 """The importable API other packages call — no Typer, no subprocess."""
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from getdrift.gitutil import GitError
+from getdrift.gitutil import GitError, head_hash
+from getdrift.paths import drift_dir
 from getdrift.schema import SchemaValidationError
 from getdrift.snapshot import (
     NotInitializedError,
@@ -122,3 +124,52 @@ def test_unserialisable_metadata_is_refused_without_poisoning_the_commit(
 
     # and the commit is still snapshottable once the bad value is gone
     assert create_snapshot(example_results).path.is_dir()
+
+
+def test_snapshot_directory_is_invisible_until_fully_written(git_repo, monkeypatch):
+    """P6-D1: writes go through a temp dir published by a single os.replace, so a
+    concurrent reader (a parallel CI runner, `drift log`, load_history()) must never
+    see `target` before every file in it exists. Spy on every write to prove it."""
+    runner.invoke(app, ["init"])
+    target = drift_dir() / "snapshots" / head_hash()
+
+    seen_target_exists = []
+    real_write_text = Path.write_text
+
+    def spy(self, *args, **kwargs):
+        seen_target_exists.append(target.exists())
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy)
+    snap = create_snapshot(DEMO / "baseline.json")
+
+    assert seen_target_exists, "write_text was never called — nothing was exercised"
+    assert not any(seen_target_exists), "target was visible before every file was written"
+    assert snap.path == target
+    assert target.is_dir()  # published after the fact, by the single os.replace
+
+
+def test_mid_write_failure_leaves_no_temp_directory_behind(git_repo, monkeypatch):
+    """Same failure-ordering reasoning as the unserialisable-metadata test above, one
+    step later: a write that fails partway through (not on the first file) must still
+    leave nothing behind — now in the temp dir the write actually happens in."""
+    runner.invoke(app, ["init"])
+    base = drift_dir()
+
+    calls = {"n": 0}
+    real_write_text = Path.write_text
+
+    def flaky(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:  # results.json already written; manifest.json fails
+            raise OSError("disk full (simulated)")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", flaky)
+    with pytest.raises(OSError):
+        create_snapshot(DEMO / "baseline.json")
+
+    for name in ("snapshots", ".tmp"):
+        directory = base / name
+        leftovers = list(directory.iterdir()) if directory.is_dir() else []
+        assert leftovers == [], f"{name}/ has leftovers: {leftovers}"
