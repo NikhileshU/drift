@@ -343,3 +343,28 @@ def test_environment_flag_on_the_gate_narrows_before_matching(git_repo):
     assert result.exit_code == 0, result.output
     assert "SUPPRESSED:" not in result.output
     assert "PASS" in result.output
+
+
+def test_a_non_mapping_config_yaml_is_a_clean_error_not_a_traceback(git_repo):
+    """P8-X1: the threshold/noise-sigma read in `drift ci` must turn a broken
+    config.yaml shape into `error: ...` + exit 1, not an AttributeError escaping from
+    `.get()` on whatever read_config handed back."""
+    first, second = _pair(git_repo, CLEAN)
+    (git_repo / ".drift" / "config.yaml").write_text("- not\n- a\n- mapping\n")
+
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_a_non_mapping_config_yaml_breaks_default_branch_resolution_cleanly(git_repo):
+    """Same as above, but for the `default_branch` read specifically — hit only when
+    --baseline is omitted, a separate read_config call from the threshold/sigma one."""
+    first, second = _pair(git_repo, _mutate(**{REGRESSED: {"pass": False}}))
+    (git_repo / ".drift" / "config.yaml").write_text("- not\n- a\n- mapping\n")
+
+    result = runner.invoke(app, ["ci", "--current", second])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)

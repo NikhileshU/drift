@@ -33,7 +33,7 @@ from getdrift.diffing import (
     judge_comparability,
 )
 from getdrift.gitutil import GitError, commits_on, has_uncommitted_changes, head_hash
-from getdrift.paths import drift_dir, read_config
+from getdrift.paths import ConfigError, drift_dir, read_config
 from getdrift.snapshot import SnapshotError, load_snapshot
 
 #: Any non-zero exit fails the build. One code, deliberately: a judge-version change
@@ -130,7 +130,10 @@ def ci(
 
     # Resolved after `current`, so the default baseline can exclude it.
     if baseline is None:
-        branch = read_config(drift).get("default_branch") or DEFAULT_BRANCH
+        try:
+            branch = read_config(drift).get("default_branch") or DEFAULT_BRANCH
+        except ConfigError as exc:
+            fail(exc)
         baseline = _default_baseline(drift, str(branch), current)
 
     try:
@@ -143,8 +146,11 @@ def ci(
             "there is nothing to gate on."
         )
 
-    resolved_threshold = _threshold(drift, threshold)
-    resolved_sigma = _noise_sigma(drift, noise_sigma)
+    try:
+        resolved_threshold = _threshold(drift, threshold)
+        resolved_sigma = _noise_sigma(drift, noise_sigma)
+    except ConfigError as exc:
+        fail(exc)
     resolved_env = environment.value if environment is not None else None
     try:
         diffs, removed = compare(

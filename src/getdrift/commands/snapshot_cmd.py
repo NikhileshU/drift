@@ -6,7 +6,7 @@ import typer
 
 from getdrift.commands import fail, warn_if_schemas_stale
 from getdrift.gitutil import GitError
-from getdrift.paths import drift_dir
+from getdrift.paths import ConfigError, drift_dir
 from getdrift.schema import SchemaValidationError
 from getdrift.snapshot import PLACEHOLDER, SnapshotError, SnapshotExistsError, create_snapshot
 
@@ -48,7 +48,7 @@ def snapshot(
             "       Snapshots are immutable — Drift will not overwrite one. Commit your\n"
             "       changes and snapshot the new commit instead."
         )
-    except (GitError, SnapshotError) as exc:
+    except (GitError, SnapshotError, ConfigError) as exc:
         fail(exc)
     except SchemaValidationError as exc:
         typer.secho(
