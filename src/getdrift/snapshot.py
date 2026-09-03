@@ -10,7 +10,9 @@ exceptions into an exit code plus a parsed stderr string.
 
 import copy
 import json
+import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -248,13 +250,25 @@ def create_snapshot(
             "`metadata` object must be JSON-native (str, number, bool, null, list, dict)."
         ) from exc
 
-    target.mkdir(parents=True)
+    # Build off to the side, under the commit's own name so a crash leaves a
+    # recognisable ".tmp-<commit>-*" orphan rather than an anonymous one, then publish
+    # with a single os.replace. That is what makes the snapshot appear atomically: a
+    # concurrent reader (a parallel CI runner, `drift log`, load_history()) either
+    # doesn't see `target` yet or sees it fully written — never a half-built directory.
+    # The temp dir is a sibling of `target` so the replace stays on one filesystem.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f".tmp-{commit}-", dir=target.parent))
     try:
         for name, text in payload:
-            (target / name).write_text(text, encoding="utf-8")
+            (tmp_dir / name).write_text(text, encoding="utf-8")
+        # Same immutability guard as the `target.exists()` check above, just closing
+        # the race window between that check and this replace: os.replace only
+        # succeeds here if `target` is still absent, so a second snapshot of the same
+        # commit that slipped past the earlier check still fails loudly, not silently.
+        os.replace(tmp_dir, target)
     except OSError:
-        # Same reasoning: a half-written directory must never outlive a failed write.
-        shutil.rmtree(target, ignore_errors=True)
+        # Same reasoning as before: nothing half-built may outlive a failed write.
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
     return Snapshot(target, commit, document, manifest, dirty, warnings)
 
