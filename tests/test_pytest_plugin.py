@@ -362,3 +362,18 @@ def test_importing_the_plugin_does_not_pull_in_the_cli_stack():
     )
     result = subprocess.run([sys.executable, "-c", check], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_hostile_config_yaml_does_not_break_the_host_suite(eval_repo):
+    """P8-X1: a malicious/broken repo's .drift/config.yaml (non-mapping top level) must
+    not turn read_config's raise into a broken pytest run — this is the actual threat
+    model the card names: a cloned repo's config, read on every test session. The
+    plugin's own broad exception handling (pytest_sessionfinish, _auto_diff) has to
+    absorb it; verified end to end with a real subprocess pytest run, not by reading
+    the source and trusting it."""
+    commit = _init_drift(eval_repo)
+    (eval_repo / ".drift" / "config.yaml").write_text("- not\n- a\n- mapping\n")
+    result = _run_pytest(eval_repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "2 passed" in result.stdout

@@ -218,3 +218,20 @@ def test_rounding_a_summary_score_is_not_a_discrepancy(git_repo):
         (git_repo / ".drift" / "snapshots" / commit / "results.json").read_text()
     )
     assert "metadata" not in written["cases"][0]
+
+
+def test_a_non_mapping_config_yaml_is_a_clean_error_not_a_traceback(git_repo, example_results):
+    """P8-X1: create_snapshot reads config.yaml (runs_per_case, require_judge_version);
+    `drift snapshot` must turn a broken shape into `error: ...` + exit 1, the same as
+    every other config problem, not an AttributeError escaping `.get()`."""
+    from getdrift.cli import app
+
+    runner = CliRunner()
+    runner.invoke(app, ["init"])
+    (git_repo / ".drift" / "config.yaml").write_text("- not\n- a\n- mapping\n")
+
+    path = _write(git_repo, "r.json", example_results)
+    result = runner.invoke(app, ["snapshot", "--results-file", str(path)])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
