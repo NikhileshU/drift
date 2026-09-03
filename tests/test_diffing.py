@@ -164,3 +164,91 @@ def test_no_duplicates_is_unaffected():
     cases = [_case("a", 0.5, True), _case("b", 0.6, True)]
     index = case_index(cases)
     assert set(index) == {"a", "b"}
+
+
+# --- P6-J1: case_stats used to average metrics on unrelated scales -----------------
+#
+# Reachable by default, not by exotic config: the pytest plugin always seeds
+# `metric_scores["passed"] = 1.0/0.0` and merges any `drift.score.<name>` the suite
+# adds on top — "add one richer score, change no test code" is the documented path.
+# Mean of [1.0, 87] = 44.0 is exactly what `case_stats` used to hand back as "the"
+# score. These fixtures are shaped like that real case, not a contrived one.
+
+
+def _multi_metric_case(case_id, passed_score, custom_score, passed):
+    """Shaped like a pytest-plugin case: a 0/1 `passed` metric plus a 0-100 custom one."""
+    return {
+        "case_id": case_id,
+        "metric_scores": {"passed": passed_score, "confidence": custom_score},
+        "pass": passed,
+        "environment": "golden_set",
+        "timestamp": "2026-09-01T09:41:02Z",
+    }
+
+
+def test_multi_metric_case_never_reaches_a_blended_score():
+    """No number derived from averaging `passed` and `confidence` may reach the caller."""
+    before = {"cases": [_multi_metric_case("c", 1.0, 80.0, True)]}
+    after = {"cases": [_multi_metric_case("c", 1.0, 90.0, True)]}
+    diffs, _ = compare(before, after)
+    diff = diffs[0]
+    # The old bug: mean([1.0, 80.0]) = 40.5, mean([1.0, 90.0]) = 45.5. Neither number,
+    # nor any other blend of the two metrics, may show up anywhere on the case.
+    blended_before, blended_after = 40.5, 45.5
+    assert diff.score_before != pytest.approx(blended_before)
+    assert diff.score_after != pytest.approx(blended_after)
+    # There is no single correct number for a multi-metric case's top-level score —
+    # only its own metrics, each compared to itself, are trustworthy.
+    assert diff.score_before is None
+    assert diff.score_after is None
+    assert diff.delta is None
+
+
+def test_multi_metric_case_reports_each_metric_against_itself():
+    before = {"cases": [_multi_metric_case("c", 1.0, 80.0, True)]}
+    after = {"cases": [_multi_metric_case("c", 1.0, 90.0, True)]}
+    diffs, _ = compare(before, after)
+    per_metric = {m.metric: m for m in diffs[0].per_metric}
+    assert set(per_metric) == {"passed", "confidence"}
+    assert per_metric["passed"].score_before == pytest.approx(1.0)
+    assert per_metric["passed"].score_after == pytest.approx(1.0)
+    assert per_metric["passed"].delta == pytest.approx(0.0)
+    assert per_metric["confidence"].score_before == pytest.approx(80.0)
+    assert per_metric["confidence"].score_after == pytest.approx(90.0)
+    assert per_metric["confidence"].delta == pytest.approx(10.0)
+
+
+def test_worst_verdict_wins_across_a_case_s_metrics():
+    """One metric improving must not quiet down another metric's regression."""
+    # `passed` steady at 1.0 (Unchanged); `confidence` drops 80 -> 20, comfortably past
+    # both the raw threshold and the noise floor (sd 0 on both sides) -> Degraded.
+    before = {"cases": [_multi_metric_case("c", 1.0, 80.0, True)]}
+    after = {"cases": [_multi_metric_case("c", 1.0, 20.0, True)]}
+    diffs, _ = compare(before, after)
+    diff = diffs[0]
+    assert diff.bucket == "Degraded"
+    by_metric = {m.metric: m.bucket for m in diff.per_metric}
+    assert by_metric == {"passed": "Unchanged", "confidence": "Degraded"}
+
+
+def test_a_pass_flip_makes_every_metric_agree_on_fixed_or_regressed():
+    """Fixed/Regressed come from the harness's own pass/fail, not from any score."""
+    before = {"cases": [_multi_metric_case("c", 0.0, 10.0, False)]}
+    after = {"cases": [_multi_metric_case("c", 1.0, 5.0, True)]}
+    diffs, _ = compare(before, after)
+    diff = diffs[0]
+    assert diff.bucket == "Fixed"
+    assert {m.bucket for m in diff.per_metric} == {"Fixed"}
+
+
+def test_single_metric_case_still_uses_the_top_level_fields():
+    """The common case is unaffected: one metric, so the old scalar fields are correct."""
+    before = {"cases": [_case("c", 0.5, True)]}
+    after = {"cases": [_case("c", 0.6, True)]}
+    diffs, _ = compare(before, after)
+    diff = diffs[0]
+    assert diff.score_before == pytest.approx(0.5)
+    assert diff.score_after == pytest.approx(0.6)
+    assert diff.delta == pytest.approx(0.1)
+    assert len(diff.per_metric) == 1
+    assert diff.per_metric[0].metric == "answer_correctness"

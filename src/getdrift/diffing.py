@@ -123,8 +123,51 @@ class CaseStats:
 
 
 @dataclass
+class MetricDiff:
+    """One metric's own before/after numbers within a case.
+
+    Never averaged with another metric's scale — see `case_stats`'s docstring for why
+    that used to happen. `bucket` mirrors the case-level Fixed/Regressed transition
+    when the harness's own pass/fail flipped (every metric agrees, because that verdict
+    does not come from a score at all), and is this metric's own Improved/Degraded/
+    Unchanged call, against its own noise floor, when it did not.
+    """
+
+    metric: str
+    score_before: Optional[float]
+    score_after: Optional[float]
+    delta: Optional[float]
+    sd_before: float
+    sd_after: float
+    noise_floor: float
+    bucket: str
+    noise_filtered: bool = False
+
+
+#: Worst-verdict-wins precedence when a case's metrics disagree: an alarm must not get
+#: quieter because a second metric was calm. Fixed/Regressed never actually compete with
+#: the others here — they come from the pass/fail transition, which every metric agrees
+#: on — but the order is total so `_worst` never has to special-case an empty gap.
+_VERDICT_RANK = {"Regressed": 0, "Degraded": 1, "Unchanged": 2, "Improved": 3, "Fixed": 4}
+
+
+def _worst(buckets) -> str:
+    return min(buckets, key=lambda b: _VERDICT_RANK[b])
+
+
+@dataclass
 class CaseDiff:
-    """One case's fate between two snapshots."""
+    """One case's fate between two snapshots.
+
+    Stays one row per case even when the case carries several metrics — `drift ci`
+    counts CASES in the Regressed/Degraded buckets to decide its exit status, and
+    splitting a case into one row per metric would change what a bucket count means
+    without anyone touching the gate. `score_before`/`score_after`/`delta`/`sd_*`/
+    `noise_floor` carry a real, single-metric-comparable number only when the case has
+    exactly one shared metric (the common case, and the one every consumer already
+    expects); otherwise there is no correct single number and they are None/0.0 rather
+    than an average across incompatible scales — see `per_metric` for the real ones.
+    """
 
     case_id: str
     bucket: str
@@ -144,6 +187,10 @@ class CaseDiff:
     noise_filtered: bool = False
     #: The harness's own `pass` flipped, but the majority across runs did not.
     pass_flip_filtered: bool = False
+    #: Each metric compared only to itself, before vs after. Always populated, even
+    #: for the single-metric case (where it duplicates the top-level fields) — one
+    #: place to read a case's numbers from, whether it carries one metric or several.
+    per_metric: List[MetricDiff] = field(default_factory=list)
 
 
 def _mean(values: List[float]) -> float:
@@ -226,42 +273,28 @@ def case_index(cases: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return index
 
 
-def _bucket_case(
-    before: Optional[Dict[str, Any]],
+def _metric_diff(
+    before: Dict[str, Any],
     after: Dict[str, Any],
+    metric: str,
     threshold: float,
     noise_sigma: float,
-) -> CaseDiff:
-    if before is None:
-        fresh = case_stats(after, sorted(after["metric_scores"]))
-        return CaseDiff(
-            case_id=after["case_id"],
-            bucket="New",
-            pass_before=None,
-            pass_after=fresh.passed,
-            score_before=None,
-            score_after=fresh.mean,
-            delta=None,
-            shared_metrics=[],
-            sd_after=fresh.sd,
-            runs_after=fresh.n,
-        )
+    was: bool,
+    now: bool,
+) -> MetricDiff:
+    """One metric's own verdict, compared only to itself before vs after.
 
-    # Only metrics present in both runs are comparable; a metric added or dropped
-    # between commits would otherwise show up as a score change that never happened.
-    shared = sorted(set(before["metric_scores"]) & set(after["metric_scores"]))
-    old, new = case_stats(before, shared), case_stats(after, shared)
-    delta = None if old.mean is None or new.mean is None else new.mean - old.mean
-
-    # The two thresholds are combined with max(), never by replacement. A single-run
-    # case has sd 0 and therefore a noise floor of 0; replacing the raw threshold with
-    # the floor would turn the test into `delta > 0` and make every rounding wobble a
-    # verdict, silently, on every snapshot written before this feature existed.
-    noise_floor = noise_sigma * ((old.sd ** 2 + new.sd ** 2) ** 0.5)
+    `was`/`now` come in from the caller rather than being recomputed here: they are
+    the harness's pass/fail majority, which does not depend on which metric (or how
+    many) you ask `case_stats` about — see its `passed` field. Passing them in means
+    every metric in a case agrees on Fixed/Regressed, as they must; only Improved/
+    Degraded/Unchanged is this metric's own call.
+    """
+    old_m, new_m = case_stats(before, [metric]), case_stats(after, [metric])
+    delta = None if old_m.mean is None or new_m.mean is None else new_m.mean - old_m.mean
+    noise_floor = noise_sigma * ((old_m.sd ** 2 + new_m.sd ** 2) ** 0.5)
     effective = max(threshold, noise_floor)
 
-    was, now = old.passed, new.passed
-    noise_filtered = False
     if not was and now:
         bucket = "Fixed"
     elif was and not now:
@@ -272,28 +305,104 @@ def _bucket_case(
         bucket = "Degraded"
     else:
         bucket = "Unchanged"
-        # Improved/Degraded require both sides to pass, per the spec's bucket table,
-        # so only a both-passing case can have been filtered by the noise floor.
-        noise_filtered = (
+
+    return MetricDiff(
+        metric=metric,
+        score_before=old_m.mean,
+        score_after=new_m.mean,
+        delta=delta,
+        sd_before=old_m.sd,
+        sd_after=new_m.sd,
+        noise_floor=noise_floor,
+        bucket=bucket,
+        # Only a both-passing, Unchanged metric can have been filtered by the noise
+        # floor — Improved/Degraded already cleared it, Fixed/Regressed never checked
+        # it. Provably zero outside that case, not just gated on it: if bucket is
+        # Improved, delta > effective, so abs(delta) > effective and the `<= effective`
+        # below is already false; symmetrically for Degraded.
+        noise_filtered=(
             was and now and delta is not None and threshold < abs(delta) <= effective
+        ),
+    )
+
+
+def _bucket_case(
+    before: Optional[Dict[str, Any]],
+    after: Dict[str, Any],
+    threshold: float,
+    noise_sigma: float,
+) -> CaseDiff:
+    if before is None:
+        metrics = sorted(after["metric_scores"])
+        fresh = case_stats(after, metrics)
+        per_metric = [
+            MetricDiff(
+                metric=m,
+                score_before=None,
+                score_after=(stats := case_stats(after, [m])).mean,
+                delta=None,
+                sd_before=0.0,
+                sd_after=stats.sd,
+                noise_floor=0.0,
+                bucket="New",
+            )
+            for m in metrics
+        ]
+        solo = per_metric[0] if len(per_metric) == 1 else None
+        return CaseDiff(
+            case_id=after["case_id"],
+            bucket="New",
+            pass_before=None,
+            pass_after=fresh.passed,
+            score_before=None,
+            score_after=solo.score_after if solo else None,
+            delta=None,
+            shared_metrics=[],
+            sd_after=solo.sd_after if solo else 0.0,
+            runs_after=fresh.n,
+            per_metric=per_metric,
         )
+
+    # Only metrics present in both runs are comparable; a metric added or dropped
+    # between commits would otherwise show up as a score change that never happened.
+    shared = sorted(set(before["metric_scores"]) & set(after["metric_scores"]))
+    # `.passed` does not depend on which metrics are asked for — case_stats derives it
+    # from each run's own `pass`, never from a score — so any metric list gets the same
+    # answer. Kept here, once, rather than inside the per-metric loop.
+    old, new = case_stats(before, shared), case_stats(after, shared)
+    was, now = old.passed, new.passed
+
+    per_metric = [
+        _metric_diff(before, after, m, threshold, noise_sigma, was, now) for m in shared
+    ]
+    solo = per_metric[0] if len(per_metric) == 1 else None
+
+    if per_metric:
+        bucket = _worst(d.bucket for d in per_metric)
+    elif not was and now:
+        bucket = "Fixed"
+    elif was and not now:
+        bucket = "Regressed"
+    else:
+        bucket = "Unchanged"
 
     return CaseDiff(
         case_id=after["case_id"],
         bucket=bucket,
         pass_before=was,
         pass_after=now,
-        score_before=old.mean,
-        score_after=new.mean,
-        delta=delta,
+        score_before=solo.score_before if solo else None,
+        score_after=solo.score_after if solo else None,
+        delta=solo.delta if solo else None,
         shared_metrics=shared,
-        sd_before=old.sd,
-        sd_after=new.sd,
+        sd_before=solo.sd_before if solo else 0.0,
+        sd_after=solo.sd_after if solo else 0.0,
         runs_before=old.n,
         runs_after=new.n,
-        noise_floor=noise_floor,
-        noise_filtered=noise_filtered,
+        noise_floor=solo.noise_floor if solo else 0.0,
+        noise_filtered=any(d.noise_filtered for d in per_metric),
         pass_flip_filtered=(before["pass"] != after["pass"]) and was == now,
+        per_metric=per_metric,
     )
 
 

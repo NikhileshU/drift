@@ -167,6 +167,26 @@ def test_fail_on_degraded_still_catches_regressions(git_repo):
     assert REGRESSED in result.output
 
 
+# --- P6-J1: per-metric bucketing must not change a single-metric suite's counts ---
+
+
+def test_single_metric_suite_bucket_counts_are_unchanged(git_repo):
+    """The demo fixture pins every bucket at once — the sharpest regression guard for
+    "per-metric bucketing changed nothing about a suite that only ever had one metric
+    per case". If per-metric math ever shifts a single-metric case's verdict, this is
+    the line that catches it, not a downstream count somewhere else.
+    """
+    first, second = _pair(git_repo, CLEAN)
+    result = runner.invoke(app, ["ci", "--baseline", first, "--current", second])
+    assert result.exit_code == 0, result.output
+    assert "Regressed 0" in result.output
+    assert "Degraded 0" in result.output
+    assert "Fixed 0" in result.output
+    assert "Improved 0" in result.output
+    assert "New 0" in result.output
+    assert "Unchanged" in result.output
+
+
 def test_an_unknown_fail_on_value_is_rejected(git_repo):
     first, second = _pair(git_repo, CLEAN)
     result = runner.invoke(
