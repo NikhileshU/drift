@@ -269,6 +269,7 @@ def write_reports(
 
     reports_dir = (drift if drift is not None else drift_dir()) / REPORTS_DIRNAME
     reports_dir.mkdir(parents=True, exist_ok=True)
+    reports_real = reports_dir.resolve()
 
     written: List[Path] = []
     for fmt in formats:
@@ -279,7 +280,22 @@ def write_reports(
         latest.write_text(content, encoding="utf-8")
         written.append(latest)
 
+        # `created_at` names the archive file (see `_archive_name`) and is not
+        # trustworthy by construction — it is whatever the caller passes, and a
+        # future caller reading it back off a snapshot's own manifest.json (the use
+        # this function's docstring anticipates) would be trusting file content, not
+        # code Drift wrote itself. `_timestamp_slug` only strips `:` and `.`; it does
+        # not stop `created_at` from carrying `/` or a leading `/` that makes
+        # pathlib's `/` treat the whole joined string as absolute, dropping
+        # `reports_dir` entirely. Checking the resolved parent — the same containment
+        # pattern as `resolve_snapshot` — catches both, structurally, rather than
+        # trying to blocklist the characters that produce them. See P8-D1.
         archive = reports_dir / _archive_name(created_at, candidate_hash, ext)
+        if archive.resolve().parent != reports_real:
+            raise ValueError(
+                f"refusing to write a report archive outside {reports_real} "
+                f"(created_at={created_at!r} produced {archive})"
+            )
         if not archive.exists():
             archive.write_text(content, encoding="utf-8")
         written.append(archive)
