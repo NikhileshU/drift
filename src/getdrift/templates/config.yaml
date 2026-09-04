@@ -28,6 +28,18 @@ model_config: {}
 # is more runs, not a smaller sigma. `--noise-sigma` overrides it.
 # noise_sigma: 2.0
 
+# Direction for metrics where a smaller number is the better result — cost, latency,
+# duration, tokens, error rate. Every metric not listed here defaults to
+# higher_is_better, same as before this setting existed. Applies to `drift diff`,
+# `drift ci`, `drift trend`, and the pytest plugin's auto-diff alike; changing it
+# reinterprets every past comparison of that metric, not just future ones — the
+# stored numbers never change, only which direction Improved/Degraded read as does.
+# The only two valid values are higher_is_better (the default) and lower_is_better;
+# `passed` may not be given a polarity — Fixed/Regressed already covers it.
+# metric_polarity:
+#   cost: lower_is_better
+#   latency: lower_is_better
+
 # Refuse to snapshot when --judge-version is left at the `unset` placeholder.
 # Off by default. Turn it on once your harness reports a real rubric or judge version:
 # a snapshot is immutable, so provenance missing at write time is missing forever, and

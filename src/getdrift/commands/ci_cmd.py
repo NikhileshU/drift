@@ -18,6 +18,7 @@ from getdrift.commands.diff_cmd import (
     _environment_mismatch_note,
     _filtered_note,
     _removed_note,
+    _metric_polarity,
     _noise_sigma,
     _provenance,
     _threshold,
@@ -149,6 +150,7 @@ def ci(
     try:
         resolved_threshold = _threshold(drift, threshold)
         resolved_sigma = _noise_sigma(drift, noise_sigma)
+        resolved_polarity = _metric_polarity(drift)
     except ConfigError as exc:
         fail(exc)
     resolved_env = environment.value if environment is not None else None
@@ -158,6 +160,7 @@ def ci(
             filter_environment(after.results, resolved_env),
             resolved_threshold,
             resolved_sigma,
+            resolved_polarity,
         )
     except DuplicateCaseIdError as exc:
         fail(exc)

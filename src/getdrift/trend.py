@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from getdrift.diffing import (
     DEFAULT_NOISE_SIGMA,
     DEFAULT_THRESHOLD,
+    HIGHER_IS_BETTER,
+    _signed,
     case_index,
     case_stats,
     compare,
@@ -70,17 +72,24 @@ class TrendPoint:
 
 @dataclass
 class SlowDrift:
-    """A monotonic decline no single diff along the way called a regression."""
+    """A monotonic decline no single diff along the way called a regression.
+
+    `total_drop` is a stored field, not `first_score - last_score` recomputed here —
+    that subtraction is only "how far it declined" for a higher_is_better metric; for
+    lower_is_better (cost, latency, ...) a decline is `last_score - first_score`. P9-2:
+    used to be a property that got this backwards for lower_is_better and rendered as
+    a negative "total drop" (a double negative once `drift_cmd`'s literal minus sign
+    was added). `_detect_slow_drift` already computes the polarity-corrected value via
+    `_signed` to decide whether a SlowDrift exists at all; storing that same number
+    here means it is never recomputed, and never wrong, a second time.
+    """
 
     start_commit: str
     end_commit: str
     snapshots: int
     first_score: float
     last_score: float
-
-    @property
-    def total_drop(self) -> float:
-        return self.first_score - self.last_score
+    total_drop: float
 
 
 @dataclass
@@ -213,19 +222,28 @@ def _case_of(snapshot: Snapshot, case_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _buckets_between(
-    previous: Snapshot, current: Snapshot, threshold: float, noise_sigma: float
+    previous: Snapshot,
+    current: Snapshot,
+    threshold: float,
+    noise_sigma: float,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Every case's verdict for one consecutive pair, via the real diff engine."""
-    diffs, _ = compare(previous.results, current.results, threshold, noise_sigma)
+    diffs, _ = compare(previous.results, current.results, threshold, noise_sigma, metric_polarity)
     return {diff.case_id: diff.bucket for diff in diffs}
 
 
-def _detect_slow_drift(points: Sequence[TrendPoint], threshold: float) -> Optional[SlowDrift]:
+def _detect_slow_drift(
+    points: Sequence[TrendPoint], threshold: float, polarity: str = HIGHER_IS_BETTER
+) -> Optional[SlowDrift]:
     """The longest run of consecutive snapshots that declined without ever regressing.
 
     Three conditions, all required:
 
-    1. The score strictly decreases at every step. A flat step is not a decline.
+    1. The score moves the wrong way at every step — down for `higher_is_better`, up
+       for `lower_is_better` — via `_signed`, the same reorientation `_metric_diff`
+       uses so this and `drift diff` never disagree about which direction is worse.
+       A flat step is not a decline.
     2. No step in the run was called Degraded or Regressed. If one was, pairwise
        diffing already reported it and there is nothing hidden to surface.
     3. The run's total drop exceeds the raw threshold. Without this a series that
@@ -241,7 +259,7 @@ def _detect_slow_drift(points: Sequence[TrendPoint], threshold: float) -> Option
     def close(run: List[TrendPoint]) -> Optional[SlowDrift]:
         if len(run) < MIN_DRIFT_RUN:
             return None
-        drop = run[0].score - run[-1].score
+        drop = _signed(run[0].score - run[-1].score, polarity)
         if drop <= threshold:
             return None
         return SlowDrift(
@@ -250,6 +268,7 @@ def _detect_slow_drift(points: Sequence[TrendPoint], threshold: float) -> Option
             snapshots=len(run),
             first_score=run[0].score,
             last_score=run[-1].score,
+            total_drop=drop,
         )
 
     for point in points:
@@ -257,7 +276,8 @@ def _detect_slow_drift(points: Sequence[TrendPoint], threshold: float) -> Option
             best = _longer(best, close(run))
             run = []
             continue
-        if run and point.score < run[-1].score and point.bucket not in ("Degraded", "Regressed"):
+        worsening = run and _signed(point.score - run[-1].score, polarity) < 0
+        if worsening and point.bucket not in ("Degraded", "Regressed"):
             run.append(point)
             continue
         best = _longer(best, close(run))
@@ -289,7 +309,11 @@ def _detect_flip_flop(points: Sequence[TrendPoint]) -> Optional[FlipFlop]:
 
 
 def _points_for_case(
-    case_id: str, history: Sequence[Snapshot], threshold: float, noise_sigma: float
+    case_id: str,
+    history: Sequence[Snapshot],
+    threshold: float,
+    noise_sigma: float,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> List[TrendPoint]:
     points = []
     for index, snapshot in enumerate(history):
@@ -297,7 +321,7 @@ def _points_for_case(
         bucket = None
         if case is not None and index:
             bucket = _buckets_between(
-                history[index - 1], snapshot, threshold, noise_sigma
+                history[index - 1], snapshot, threshold, noise_sigma, metric_polarity
             ).get(case_id)
         stats = case_stats(case, sorted(case["metric_scores"])) if case else None
         points.append(
@@ -329,7 +353,12 @@ def _metrics_of_case(case_id: str, history: Sequence[Snapshot]) -> List[str]:
 
 
 def _points_for_metric_in_case(
-    case_id: str, metric: str, history: Sequence[Snapshot], threshold: float, noise_sigma: float
+    case_id: str,
+    metric: str,
+    history: Sequence[Snapshot],
+    threshold: float,
+    noise_sigma: float,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> List[TrendPoint]:
     """One metric's own series for one case — never averaged with the case's other metrics.
 
@@ -344,7 +373,7 @@ def _points_for_metric_in_case(
         bucket = None
         if case is not None and index:
             bucket = _buckets_between(
-                history[index - 1], snapshot, threshold, noise_sigma
+                history[index - 1], snapshot, threshold, noise_sigma, metric_polarity
             ).get(case_id)
         stats = case_stats(case, [metric]) if has_metric else None
         points.append(
@@ -361,7 +390,11 @@ def _points_for_metric_in_case(
 
 
 def _passfail_points(
-    case_id: str, history: Sequence[Snapshot], threshold: float, noise_sigma: float
+    case_id: str,
+    history: Sequence[Snapshot],
+    threshold: float,
+    noise_sigma: float,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> List[TrendPoint]:
     """Pass/fail and verdict per snapshot, with no score.
 
@@ -375,7 +408,7 @@ def _passfail_points(
         bucket = None
         if case is not None and index:
             bucket = _buckets_between(
-                history[index - 1], snapshot, threshold, noise_sigma
+                history[index - 1], snapshot, threshold, noise_sigma, metric_polarity
             ).get(case_id)
         stats = case_stats(case, []) if case is not None else None
         points.append(
@@ -397,6 +430,7 @@ def case_trend(
     drift: Optional[Path] = None,
     threshold: float = DEFAULT_THRESHOLD,
     noise_sigma: float = DEFAULT_NOISE_SIGMA,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> CaseTrend:
     """One case across every snapshot, with slow drift and flip-flopping flagged.
 
@@ -410,29 +444,32 @@ def case_trend(
     """
     snapshots = list(history) if history is not None else load_history(drift)
     metrics = _metrics_of_case(case_id, snapshots)
+    polarity = metric_polarity or {}
 
     if len(metrics) > 1:
         per_metric = {
-            m: _points_for_metric_in_case(case_id, m, snapshots, threshold, noise_sigma)
+            m: _points_for_metric_in_case(case_id, m, snapshots, threshold, noise_sigma, polarity)
             for m in metrics
         }
-        passfail = _passfail_points(case_id, snapshots, threshold, noise_sigma)
+        passfail = _passfail_points(case_id, snapshots, threshold, noise_sigma, polarity)
         return CaseTrend(
             case_id=case_id,
             points=[],
             per_metric=per_metric,
             metric_slow_drift={
-                m: _detect_slow_drift(pts, threshold) for m, pts in per_metric.items()
+                m: _detect_slow_drift(pts, threshold, polarity.get(m, HIGHER_IS_BETTER))
+                for m, pts in per_metric.items()
             },
             flip_flop=_detect_flip_flop(passfail),
             undated=_undated(snapshots),
         )
 
-    points = _points_for_case(case_id, snapshots, threshold, noise_sigma)
+    points = _points_for_case(case_id, snapshots, threshold, noise_sigma, polarity)
+    solo_polarity = polarity.get(metrics[0], HIGHER_IS_BETTER) if metrics else HIGHER_IS_BETTER
     return CaseTrend(
         case_id=case_id,
         points=points,
-        slow_drift=_detect_slow_drift(points, threshold),
+        slow_drift=_detect_slow_drift(points, threshold, solo_polarity),
         flip_flop=_detect_flip_flop(points),
         undated=_undated(snapshots),
     )
@@ -448,6 +485,7 @@ def metric_trend(
     drift: Optional[Path] = None,
     threshold: float = DEFAULT_THRESHOLD,
     noise_sigma: float = DEFAULT_NOISE_SIGMA,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> MetricTrend:
     """One metric averaged over every case carrying it, across the whole history.
 
@@ -478,15 +516,18 @@ def metric_trend(
                 present=bool(present),
             )
         )
+    polarity = (metric_polarity or {}).get(metric, HIGHER_IS_BETTER)
     flipping = sorted(
         case_id
         for case_id in case_ids
-        if _detect_flip_flop(_points_for_case(case_id, snapshots, threshold, noise_sigma))
+        if _detect_flip_flop(
+            _points_for_case(case_id, snapshots, threshold, noise_sigma, metric_polarity)
+        )
     )
     return MetricTrend(
         metric=metric,
         points=points,
-        slow_drift=_detect_slow_drift(points, threshold),
+        slow_drift=_detect_slow_drift(points, threshold, polarity),
         flip_flopping_cases=flipping,
         undated=_undated(snapshots),
     )

@@ -27,7 +27,7 @@ from getdrift.diffing import (
     filter_environment,
 )
 from getdrift.gitutil import GitError
-from getdrift.paths import drift_dir
+from getdrift.paths import ConfigError, drift_dir
 from getdrift.trend import TrendPoint, case_trend, load_history, metric_trend
 
 #: Same yellow as the suppressed-case notes in `drift diff`. A flagged trend is the
@@ -196,10 +196,14 @@ def trend(
 
     # Imported here rather than at module scope: these resolve config, and diff_cmd
     # owns the precedence rules for both flags.
-    from getdrift.commands.diff_cmd import _noise_sigma, _threshold
+    from getdrift.commands.diff_cmd import _metric_polarity, _noise_sigma, _threshold
 
     resolved_threshold = _threshold(drift, threshold)
     resolved_sigma = _noise_sigma(drift, noise_sigma)
+    try:
+        resolved_polarity = _metric_polarity(drift)
+    except ConfigError as exc:
+        fail(exc)
 
     history = load_history(drift)
     if not history:
@@ -222,11 +226,11 @@ def trend(
 
     if case_id is not None:
         result = case_trend(case_id, history, threshold=resolved_threshold,
-                            noise_sigma=resolved_sigma)
+                            noise_sigma=resolved_sigma, metric_polarity=resolved_polarity)
         label, show_pass = f"case {case_id}", True
     else:
         result = metric_trend(metric, history, threshold=resolved_threshold,
-                              noise_sigma=resolved_sigma)
+                              noise_sigma=resolved_sigma, metric_polarity=resolved_polarity)
         label, show_pass = f"metric {metric}", False
 
     console = Console(highlight=False)
