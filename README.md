@@ -436,6 +436,8 @@ Drift ingests from harnesses teams already use, with as little glue as possible.
 - **OpenTelemetry** — register `DriftSpanCollector` as a span processor and any span
   carrying a `drift.case_id` attribute becomes an eval case:
   [`docs/otel-convention.md`](docs/otel-convention.md).
+- **Anything else** — no built-in adapter, but the shape you need to hit and the traps
+  in each field: [`docs/custom-harness-bridge.md`](docs/custom-harness-bridge.md).
 
 The pytest plugin in action, on a repo whose test files mention Drift nowhere:
 
