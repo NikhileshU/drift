@@ -373,3 +373,69 @@ def test_metric_trend_refuses_a_snapshot_with_a_duplicate_case_id():
     )
     with pytest.raises(DuplicateCaseIdError, match="'x'"):
         metric_trend("accuracy", history=[dup_snapshot])
+
+
+# --- P9-2: metric polarity — _detect_slow_drift's own second call site -------------
+#
+# `trend.py::_detect_slow_drift` had the same bug as `diffing.py::_metric_diff`,
+# inverted: for a lower_is_better metric, a consistent DECREASE (real improvement)
+# used to get flagged as slow drift, and a consistent INCREASE (the real problem)
+# never did. Same six-step shape as the `slow-drift`/`steady` fixtures above,
+# reused for a `cost` metric instead of `accuracy`.
+
+_POLARITY_COMMITS = [f"{index:040x}" for index in range(101, 107)]
+_POLARITY_CREATED = [f"2026-09-1{index}T09:00:00Z" for index in range(1, 7)]
+
+
+def _cost_snapshot(index, cost_series):
+    return Snapshot(
+        path=Path(f"/nonexistent/{_POLARITY_COMMITS[index]}"),
+        commit_hash=_POLARITY_COMMITS[index],
+        results={
+            "schema_version": "1.1.0",
+            "cases": [{
+                "case_id": "c",
+                "metric_scores": {"cost": cost_series[index]},
+                "pass": True,
+                "environment": "golden_set",
+                "timestamp": _POLARITY_CREATED[index],
+            }],
+        },
+        manifest={"commit_hash": _POLARITY_COMMITS[index],
+                  "created_at": _POLARITY_CREATED[index], "judge_version": "rubric-v1"},
+    )
+
+
+#: Same shape as the `slow-drift` fixture above: five 0.030 steps, each individually
+#: Unchanged under the 0.05 threshold, total 0.150 well past it.
+_RISING_COST = [0.010, 0.040, 0.070, 0.100, 0.130, 0.160]
+
+
+def test_lower_is_better_consistent_increase_is_flagged_as_slow_drift():
+    """Cost climbing steadily: each step is Unchanged under the 0.05 threshold,
+    exactly like the `slow-drift` fixture above, but this is a real decline — cost
+    only ever goes up — because cost is lower_is_better."""
+    history = [_cost_snapshot(i, _RISING_COST) for i in range(6)]
+    trend = case_trend("c", history, metric_polarity={"cost": "lower_is_better"})
+    drift = trend.slow_drift
+    assert drift is not None
+    assert drift.snapshots == 6
+    assert drift.total_drop == pytest.approx(0.150)
+
+
+def test_lower_is_better_consistent_decrease_is_not_flagged():
+    """The mirror image: cost falling the same amount is an improvement, not drift."""
+    falling = list(reversed(_RISING_COST))
+    history = [_cost_snapshot(i, falling) for i in range(6)]
+    trend = case_trend("c", history, metric_polarity={"cost": "lower_is_better"})
+    assert trend.slow_drift is None
+
+
+def test_the_same_rising_series_is_not_drift_under_the_default_polarity():
+    """Sanity check on the other direction: without declaring cost lower_is_better, a
+    rising series reads as (wrongly) improving, so no drift is the pre-fix answer —
+    confirms the two tests above are actually exercising the polarity argument, not
+    some other change in behaviour."""
+    history = [_cost_snapshot(i, _RISING_COST) for i in range(6)]
+    trend = case_trend("c", history)  # no metric_polarity at all
+    assert trend.slow_drift is None

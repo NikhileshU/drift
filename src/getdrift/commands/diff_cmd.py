@@ -1,7 +1,7 @@
 """`drift diff` — bucketed comparison of two snapshots."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -23,6 +23,7 @@ from getdrift.diffing import (
     compare,
     filter_environment,
     judge_comparability,
+    parse_metric_polarity,
 )
 from getdrift.gitutil import GitError
 from getdrift.paths import ConfigError, drift_dir, read_config
@@ -60,6 +61,13 @@ def _noise_sigma(drift: Path, override: Optional[float]) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return DEFAULT_NOISE_SIGMA
+
+
+def _metric_polarity(drift: Path) -> Dict[str, str]:
+    """`metric_polarity` from config.yaml, validated. No CLI override — config-file
+    only, per spec: this is a property of what a metric NAME means, not a one-off
+    tuning knob like `--threshold`."""
+    return parse_metric_polarity(read_config(drift).get("metric_polarity"))
 
 
 def _filtered_note(console: Console, diffs: List[CaseDiff]) -> None:
@@ -335,6 +343,7 @@ def diff(
     try:
         resolved_threshold = _threshold(drift, threshold)
         resolved_sigma = _noise_sigma(drift, noise_sigma)
+        resolved_polarity = _metric_polarity(drift)
     except ConfigError as exc:
         fail(exc)
     resolved_env = environment.value if environment is not None else None
@@ -344,6 +353,7 @@ def diff(
             filter_environment(after.results, resolved_env),
             resolved_threshold,
             resolved_sigma,
+            resolved_polarity,
         )
     except DuplicateCaseIdError as exc:
         fail(exc)

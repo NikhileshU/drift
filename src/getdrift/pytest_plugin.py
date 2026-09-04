@@ -24,6 +24,7 @@ from getdrift.diffing import (
     Comparability,
     compare,
     judge_comparability,
+    parse_metric_polarity,
 )
 from getdrift.gitutil import GitError
 from getdrift.paths import read_config
@@ -528,8 +529,16 @@ def _auto_diff(reporter, drift: Path, snapshot: Snapshot) -> None:
         if baseline_hash is None:
             return  # spec: no ancestor means print NOTHING, not even a notice
         before = load_snapshot(baseline_hash, drift)
+        # Unlike threshold/noise_sigma above (which stay at their defaults here —
+        # auto-diff has never read those from config), polarity IS read: an
+        # unconfigured metric defaults to higher_is_better regardless, so reading it
+        # costs auto-diff nothing on a repo that never sets metric_polarity, and a
+        # repo that does set it wants Improved/Degraded right in every surface,
+        # including this one — not just `drift diff`. A bad value degrades to
+        # silence like everything else in this function, via the except below.
+        metric_polarity = parse_metric_polarity(read_config(drift).get("metric_polarity"))
         # compare()'s own removed list — not recomputed, per god's ruling.
-        diffs, removed = compare(before.results, snapshot.results)
+        diffs, removed = compare(before.results, snapshot.results, metric_polarity=metric_polarity)
         comparability = judge_comparability(before.manifest, snapshot.manifest)
         lines = _auto_diff_lines(diffs, comparability, baseline_hash)
         if _auto_export_enabled(drift):

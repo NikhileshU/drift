@@ -1,7 +1,10 @@
 """Pure bucketing logic for `drift diff`.
 
 Kept free of Typer and rich so it can be tested — and extended with noise-aware
-thresholds — without going through the CLI.
+thresholds — without going through the CLI. Also free of config I/O: `compare()`
+takes `threshold`/`noise_sigma`/`metric_polarity` as plain values, never reads
+`.drift/config.yaml` itself (`ConfigError` is imported only as an exception type for
+`parse_metric_polarity` to raise; importing it does no I/O).
 """
 
 import statistics
@@ -9,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+from getdrift.paths import ConfigError
 from getdrift.schema import PLACEHOLDER
 
 DEFAULT_THRESHOLD = 0.05
@@ -17,6 +21,49 @@ DEFAULT_THRESHOLD = 0.05
 #: Improved or Degraded. The spec's figure. Raising it suppresses more borderline calls;
 #: lowering it lets sampling noise read as regressions.
 DEFAULT_NOISE_SIGMA = 2.0
+
+#: The only two values a metric's declared direction can take. Absent from
+#: `metric_scores`'s own schema on purpose — direction is not a property of one run,
+#: it is a property of what the metric NAME means, fixed for the life of the project,
+#: so it lives in `.drift/config.yaml` (read by the caller — see `parse_metric_polarity`)
+#: rather than being stamped into every immutable snapshot that ever mentions the metric.
+HIGHER_IS_BETTER, LOWER_IS_BETTER = "higher_is_better", "lower_is_better"
+_VALID_POLARITIES = {HIGHER_IS_BETTER, LOWER_IS_BETTER}
+
+
+def parse_metric_polarity(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Validate a `metric_polarity` config mapping. Raises ConfigError, never guesses.
+
+    `raw` is whatever `.get("metric_polarity")` returned from an already-loaded
+    `read_config()` — this function does no I/O itself, so `compare()` and everything
+    it calls stays free of config loading, exactly as before this feature.
+
+    A bad value fails loud rather than falling back to the default: silently treating
+    a typo'd polarity as `higher_is_better` would misclassify a verdict for exactly
+    the reason this feature exists to fix, just from a typo instead of an absent one.
+
+    `passed` is rejected explicitly. It is the always-present pytest-plugin 0.0/1.0
+    metric; Fixed/Regressed already classifies it from the harness's own pass/fail,
+    never from a score delta, so a `passed` entry here would be a setting that looks
+    like it does something and does not.
+    """
+    if not raw:
+        return {}
+    polarity: Dict[str, str] = {}
+    for metric, value in raw.items():
+        if metric == "passed":
+            raise ConfigError(
+                "metric_polarity: 'passed' is not a metric you can set polarity on — "
+                "Fixed/Regressed already covers it."
+            )
+        if value not in _VALID_POLARITIES:
+            raise ConfigError(
+                f"metric_polarity: {metric!r} is set to {value!r}, but only "
+                f"{HIGHER_IS_BETTER!r} and {LOWER_IS_BETTER!r} are valid (omit a "
+                "metric entirely to leave it at the higher_is_better default)."
+            )
+        polarity[metric] = value
+    return polarity
 
 #: Whether two snapshots were graded by the same judge, and so whether a verdict
 #: about the difference between their scores means anything.
@@ -336,6 +383,19 @@ def case_index(cases: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return index
 
 
+def _signed(delta: float, polarity: str) -> float:
+    """`delta` reoriented so a positive result always means the metric improved.
+
+    `delta` is always `after - before`. That only means "got better" when polarity is
+    `higher_is_better`; for `lower_is_better` (cost, latency, duration, tokens, error
+    rate) a positive raw delta is a regression. Every verdict decision — the six-bucket
+    call in `_metric_diff` and the slow-drift check in `trend.py` — compares against
+    THIS, never the raw delta, so "which way is better" is decided once, here, instead
+    of twice in two files agreeing by convention.
+    """
+    return delta if polarity == HIGHER_IS_BETTER else -delta
+
+
 def _metric_diff(
     before: Dict[str, Any],
     after: Dict[str, Any],
@@ -344,6 +404,7 @@ def _metric_diff(
     noise_sigma: float,
     was: bool,
     now: bool,
+    polarity: str = HIGHER_IS_BETTER,
 ) -> MetricDiff:
     """One metric's own verdict, compared only to itself before vs after.
 
@@ -352,9 +413,15 @@ def _metric_diff(
     many) you ask `case_stats` about — see its `passed` field. Passing them in means
     every metric in a case agrees on Fixed/Regressed, as they must; only Improved/
     Degraded/Unchanged is this metric's own call.
+
+    `polarity` defaults to `higher_is_better` so every caller and test that predates
+    this parameter keeps passing unchanged. `score_before`/`score_after`/`delta` below
+    are always the raw, unsigned numbers — what actually happened — only the bucket
+    decision reads the polarity-adjusted `_signed(delta, polarity)`.
     """
     old_m, new_m = case_stats(before, [metric]), case_stats(after, [metric])
     delta = None if old_m.mean is None or new_m.mean is None else new_m.mean - old_m.mean
+    signed_delta = None if delta is None else _signed(delta, polarity)
     noise_floor = noise_sigma * ((old_m.sd ** 2 + new_m.sd ** 2) ** 0.5)
     effective = max(threshold, noise_floor)
 
@@ -362,9 +429,9 @@ def _metric_diff(
         bucket = "Fixed"
     elif was and not now:
         bucket = "Regressed"
-    elif was and now and delta is not None and delta > effective:
+    elif was and now and signed_delta is not None and signed_delta > effective:
         bucket = "Improved"
-    elif was and now and delta is not None and delta < -effective:
+    elif was and now and signed_delta is not None and signed_delta < -effective:
         bucket = "Degraded"
     else:
         bucket = "Unchanged"
@@ -381,8 +448,9 @@ def _metric_diff(
         # Only a both-passing, Unchanged metric can have been filtered by the noise
         # floor — Improved/Degraded already cleared it, Fixed/Regressed never checked
         # it. Provably zero outside that case, not just gated on it: if bucket is
-        # Improved, delta > effective, so abs(delta) > effective and the `<= effective`
-        # below is already false; symmetrically for Degraded.
+        # Improved, signed_delta > effective, and abs(signed_delta) == abs(delta)
+        # (`_signed` only ever flips the sign), so abs(delta) > effective and the
+        # `<= effective` below is already false; symmetrically for Degraded.
         noise_filtered=(
             was and now and delta is not None and threshold < abs(delta) <= effective
         ),
@@ -418,6 +486,7 @@ def _bucket_case(
     after: Dict[str, Any],
     threshold: float,
     noise_sigma: float,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> CaseDiff:
     if before is None:
         metrics = sorted(after["metric_scores"])
@@ -488,8 +557,13 @@ def _bucket_case(
             per_metric=per_metric,
         )
 
+    polarity = metric_polarity or {}
     per_metric = [
-        _metric_diff(before, after, m, threshold, noise_sigma, was, now) for m in shared
+        _metric_diff(
+            before, after, m, threshold, noise_sigma, was, now,
+            polarity.get(m, HIGHER_IS_BETTER),
+        )
+        for m in shared
     ]
     solo = per_metric[0] if len(per_metric) == 1 else None
 
@@ -529,6 +603,7 @@ def compare(
     after: Dict[str, Any],
     threshold: float = DEFAULT_THRESHOLD,
     noise_sigma: float = DEFAULT_NOISE_SIGMA,
+    metric_polarity: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[CaseDiff], List[str]]:
     """Bucket every case in `after` against `before`.
 
@@ -546,11 +621,18 @@ def compare(
     a different problem from the duplicate above (one case_id, two valid snapshots,
     an invalid comparison), and not something `--environment` narrows away on its own
     unless the caller applies `filter_environment` to both sides first.
+
+    `metric_polarity` maps a metric name to `HIGHER_IS_BETTER` (the default for any
+    metric not in the map — every pre-existing caller and snapshot keeps behaving
+    exactly as before) or `LOWER_IS_BETTER`. `compare()` does no config loading itself
+    — see the module docstring — so the caller reads `.drift/config.yaml` and passes
+    the already-validated mapping in, the same as it already does for `threshold` and
+    `noise_sigma`. Use `parse_metric_polarity` to turn a raw config value into this.
     """
     prior = case_index(before["cases"])
     current = case_index(after["cases"])
     diffs = [
-        _bucket_case(prior.get(c["case_id"]), c, threshold, noise_sigma)
+        _bucket_case(prior.get(c["case_id"]), c, threshold, noise_sigma, metric_polarity)
         for c in after["cases"]
     ]
     removed = [case_id for case_id in prior if case_id not in current]
