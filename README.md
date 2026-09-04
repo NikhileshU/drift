@@ -25,8 +25,7 @@ pip install git+https://github.com/NikhileshU/drift
 
 Requires Python 3.9+ and `git`. Installs the `drift` command.
 
-> Not on PyPI yet. Phase 4 is still changing the CLI surface, so publishing a version
-> now would be stale within days.
+> Not on PyPI yet — install from git.
 
 > [!IMPORTANT]
 > **Upgrading a repo that already ran `drift init`? Re-run `drift init`.** It is not
@@ -203,11 +202,40 @@ full commit hash or any unambiguous prefix.
 |---|---|
 | `--threshold FLOAT` | Score delta counted as Improved/Degraded. Defaults to `diff_threshold` in config, else `0.05`. |
 | `--noise-sigma FLOAT` | Combined standard deviations a change must clear. Defaults to `noise_sigma` in config, else `2.0`. `0` disables the noise filter. |
+| `--environment [golden_set\|production_sample]` | Compare only cases recorded under this environment. |
 
 ```bash
 drift diff 15dd05db03fe a4352a3136bb
 drift diff 15dd05d a4352a3 --threshold 0.1 --noise-sigma 0
 ```
+
+A case run under different environments on each side (a `golden_set` case later sampled
+in `production_sample`, say) gets no verdict at all — its score moved for a reason that
+has nothing to do with the model, and a bucket would claim otherwise:
+
+```console
+$ drift diff 4e84ceb78677 0c5ded68db18
+
+4e84ceb78677 → 0c5ded68db18  threshold 0.05  noise 2.0σ
+
+judge_version  demo → demo
+model_version  unset → unset
+prompt_version unset → unset
+
+Regressed 0  Degraded 0  Fixed 0  Improved 0  New 0  Unchanged 0
+Scores only, no verdict (1)
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
+┃ case_id              ┃        pass ┃ before ┃ after ┃  delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
+│ sku_lookup_ambiguous │ pass → pass │  0.610 │ 0.400 │ -0.210 │
+└──────────────────────┴─────────────┴────────┴───────┴────────┘
+
+SUPPRESSED: 1 case(s) compared across different environments, no verdict shown:
+sku_lookup_ambiguous (golden_set vs production_sample). Pass --environment
+<golden_set|production_sample> to compare only one.
+```
+
+`drift ci` and `drift trend` take the same `--environment` flag, for the same reason.
 
 ### `drift ci`
 
@@ -221,6 +249,7 @@ a CI log shows what actually failed rather than just a red X.
 | `--fail-on [regression\|degraded]` | `regression` (default) fails on a pass→fail case. `degraded` also fails on a score drop that clears the threshold with both runs still passing. |
 | `--threshold FLOAT` | As `drift diff`. |
 | `--noise-sigma FLOAT` | As `drift diff`. |
+| `--environment [golden_set\|production_sample]` | Gate on only cases from this environment, applied to both snapshots. |
 
 Exit `0` when the gate passes, `1` when it fails:
 
@@ -249,7 +278,8 @@ cannot be trusted in either direction, so it blocks rather than reporting verdic
 cannot stand behind.
 
 A ready-to-copy GitHub Actions workflow is in
-[`examples/ci/github-actions.yml`](examples/ci/github-actions.yml).
+[`examples/ci/github-actions.yml`](examples/ci/github-actions.yml); more on wiring it
+into other CI systems in [`docs/ci-integration.md`](docs/ci-integration.md).
 
 ### `drift trend`
 
@@ -261,6 +291,7 @@ and flags two patterns a pairwise diff structurally cannot see.
 | `--metric TEXT` | Chart this metric averaged across every case carrying it, instead of a single case. |
 | `--threshold FLOAT` | Delta counted as Improved/Degraded between consecutive snapshots. As `drift diff`. |
 | `--noise-sigma FLOAT` | Combined standard deviations a change must clear. As `drift diff`. |
+| `--environment [golden_set\|production_sample]` | Chart only cases from this environment, applied to every snapshot in the history. |
 
 **Slow drift** — a decline where no individual step was ever large enough to be called
 a regression, so every diff along the way said Unchanged:
@@ -347,7 +378,8 @@ individually.
 ```
 
 The unstable case is named rather than left inside the average, since averaging is
-exactly what would hide it.
+exactly what would hide it. More on reading these charts in
+[`docs/trend-view.md`](docs/trend-view.md).
 
 ### `drift ingest`
 
@@ -394,9 +426,37 @@ overwriting would make every past diff unreproducible.
 | Unchanged | delta clears neither |
 | New | `case_id` absent from the baseline |
 
-Score delta is the mean over metrics present in **both** snapshots. A case present in the
-baseline and gone from the current snapshot is reported by name under the summary rather
-than silently dropped.
+A case carrying more than one metric is never blended into one number — a case's real
+`before`/`after`/`delta` are only shown when it has exactly one shared metric. With
+several, each metric is diffed against its own noise floor and gets its own verdict, and
+the case's overall bucket is the *worst* of them (Regressed beats Degraded beats
+Unchanged beats Improved beats Fixed) — one metric improving cannot quiet an alarm
+another metric is raising:
+
+```console
+$ drift diff 3818f6fad6b9 077aea68be77
+
+3818f6fad6b9 → 077aea68be77  threshold 0.05  noise 2.0σ
+
+judge_version  demo → demo
+model_version  unset → unset
+prompt_version unset → unset
+
+Degraded (1)
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                               ┃    pass     ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ multi_hop_inventory_question          │ pass → pass │      — │     — │     — │
+│   answer_correctness: 0.900→0.950     │             │        │       │       │
+│ (+0.050)  citation_precision:         │             │        │       │       │
+│ 0.850→0.550 (-0.300)                  │             │        │       │       │
+└───────────────────────────────────────┴─────────────┴────────┴───────┴───────┘
+
+Regressed 0  Degraded 1  Fixed 0  Improved 0  New 0  Unchanged 0
+```
+
+A case present in the baseline and gone from the current snapshot is reported by name
+under the summary rather than silently dropped.
 
 ### Noise-aware diffing
 
@@ -424,6 +484,50 @@ verdicts, because a "regression" across a rubric edit is usually the rubric. Whe
 snapshot records one it warns instead — that is an absence of evidence, not evidence of a
 change. Full behaviour in [`docs/comparability.md`](docs/comparability.md).
 
+### Metric polarity
+
+Every metric defaults to higher-is-better: a bigger score means "better." That is wrong
+for a metric where the good outcome is a *smaller* number — cost, latency, duration,
+tokens, error rate — and left unset, a cost blowup buckets as Improved. Declare it in
+`.drift/config.yaml`:
+
+```yaml
+metric_polarity:
+  cost: lower_is_better
+```
+
+Same two snapshots, `cost` 0.010 → 0.070, before and after declaring it:
+
+```console
+$ drift diff 521a2586c91c 91b3333a478b   # metric_polarity not set
+...
+Improved (1)
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
+┃ case_id             ┃    pass     ┃ before ┃ after ┃  delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
+│ run-length-encoding │ pass → pass │  0.010 │ 0.070 │ +0.060 │
+└─────────────────────┴─────────────┴────────┴───────┴────────┘
+
+Regressed 0  Degraded 0  Fixed 0  Improved 1  New 0  Unchanged 0
+$ drift diff 521a2586c91c 91b3333a478b   # cost: lower_is_better declared
+...
+Degraded (1)
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
+┃ case_id             ┃    pass     ┃ before ┃ after ┃  delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
+│ run-length-encoding │ pass → pass │  0.010 │ 0.070 │ +0.060 │
+└─────────────────────┴─────────────┴────────┴───────┴────────┘
+
+Regressed 0  Degraded 1  Fixed 0  Improved 0  New 0  Unchanged 0
+```
+
+The stored delta is always the real, unsigned number (`+0.060` either way) — only which
+bucket it lands in flips. Only `higher_is_better` (the default) and `lower_is_better` are
+valid values, and `passed` cannot be given a polarity — Fixed/Regressed already covers
+it. There is no CLI override: this applies uniformly to `drift diff`, `drift ci`,
+`drift trend`, and the pytest plugin's auto-diff, because polarity is a property of what
+the metric name means, not a tuning knob for one invocation.
+
 ## Integrations
 
 Drift ingests from harnesses teams already use, with as little glue as possible.
@@ -432,7 +536,8 @@ Drift ingests from harnesses teams already use, with as little glue as possible.
   stability rules: [`docs/promptfoo-mapping.md`](docs/promptfoo-mapping.md).
 - **pytest** — installing Drift registers a `pytest11` plugin. In a repo that has run
   `drift init`, `pytest` snapshots the suite with no import, conftest or flag in your
-  test files: [`examples/pytest/`](examples/pytest/README.md).
+  test files, and per-case scores come from `record_property` — also flag-free:
+  [`examples/pytest/`](examples/pytest/README.md).
 - **OpenTelemetry** — register `DriftSpanCollector` as a span processor and any span
   carrying a `drift.case_id` attribute becomes an eval case:
   [`docs/otel-convention.md`](docs/otel-convention.md).
@@ -447,6 +552,53 @@ $ pytest -q
 
 1 passed in 0.03s
 ```
+
+**Auto-diff.** Every run after the first also diffs the new snapshot against the
+nearest ancestor commit that already has one — not necessarily the immediately previous
+commit, it walks history — and prints a compact block in pytest's own summary section.
+It only ever reports; nothing here touches pytest's exit code, `drift ci` is what a
+build actually fails on:
+
+```console
+$ pytest -q
+.F                                                                       [100%]- Drift: snapshot written: /private/tmp/claude/agent-evals/.drift/snapshots/c3a504bd9dd25792c8c0a5b60b8c251e7063b168 (2 case(s)) -
+
+=================================== FAILURES ===================================
+...
+── Drift ───────────────────────────────
+  vs e1e04728 (previous run, same branch)
+
+  warning: neither snapshot records a judge version, so Drift cannot tell whether the grader changed between them. The verdicts below are unverified — pass --judge-version to `drift snapshot` so Drift can check them.
+
+  Regressed 1: test_eval.py::test_refund_policy
+  Degraded  0
+  Fixed     0
+  Improved  0
+  New       0
+  Unchanged 1
+────────────────────────────────────────
+=========================== short test summary info ============================
+FAILED test_eval.py::test_refund_policy - assert False
+1 failed, 1 passed in 0.08s
+```
+
+The same run also writes a JSON and Markdown report to `.drift/reports/`: an
+always-overwritten `latest.<ext>` — the thing to open right now — plus a timestamped
+archive that is never overwritten, one history entry per commit:
+
+```console
+$ ls .drift/reports/
+2026-09-04T181418776Z_c3a504bd9dd2.json  2026-09-04T181418776Z_c3a504bd9dd2.md
+latest.json                              latest.md
+```
+
+Three optional `config.yaml` keys control this:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `auto_diff` | `true` | Print the terminal block above. `DRIFT_AUTO_DIFF=0` turns it off for one run regardless of config. |
+| `auto_export` | `true` | Write the report files. |
+| `export_formats` | `[json, md]` | Which format(s) to write — a bare string or a list. |
 
 ## Comparison to alternatives
 
@@ -482,7 +634,7 @@ Install with the `[dev]` extra, not a bare `pip install -e .` — the OTel adapt
 import `opentelemetry`, and without it `tests/test_otel_adapter.py` fails during
 *collection*, which reads like a broken checkout rather than a missing dependency.
 
-The suite is 239 tests.
+The suite is 412 tests.
 
 ## License
 
