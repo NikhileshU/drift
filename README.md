@@ -71,8 +71,8 @@ $ drift snapshot --results-file examples/demo/baseline.json \
     --prompt-version support-agent@v6 \
     --judge-version rubric-2026-08-14
 warning: 6 case(s) carry fewer than the expected 3 runs (escalation_tone_angry, greeting_smoke_test, legacy_fax_number_lookup, ...). Drift can only separate a real change from sampling noise when a case is run more than once; with one run there is no noise estimate at all.
-Snapshot written: .drift/snapshots/15dd05db03fec60500cae85f975527afdf757718
-  commit        15dd05db03fec60500cae85f975527afdf757718
+Snapshot written: .drift/snapshots/155a50a675389e62c42cefebee4b19230f857ce7
+  commit        155a50a675389e62c42cefebee4b19230f857ce7
   cases         6
   judge_version rubric-2026-08-14
 ```
