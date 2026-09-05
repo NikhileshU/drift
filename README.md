@@ -94,62 +94,82 @@ drift snapshot --results-file examples/demo/candidate.json \
 **4. Diff the two.**
 
 ```console
-$ drift diff 15dd05db03fe a4352a3136bb
+$ drift diff 155a50a67538 4a20859705eb
 
-15dd05db03fe → a4352a3136bb  threshold 0.05  noise 2.0σ
+155a50a67538 → 4a20859705eb  threshold 0.05  noise 2.0σ
 
 judge_version  rubric-2026-08-14 → rubric-2026-08-14
 model_version  claude-opus-5 → claude-opus-5
 prompt_version support-agent@v6 → support-agent@v7
 
 Regressed (1)
-┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
-┃ case_id               ┃    pass     ┃ before ┃ after ┃  delta ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ escalation_tone_angry │ pass → FAIL │  0.880 │ 0.550 │ -0.330 │
-└───────────────────────┴─────────────┴────────┴───────┴────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                               ┃    pass     ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ escalation_tone_angry                 │ pass → FAIL │      — │     — │     — │
+│   answer_correctness: 0.880→0.550     │             │        │       │       │
+│ (-0.330)  citation_precision:         │             │        │       │       │
+│ 0.880→0.550 (-0.330)                  │             │        │       │       │
+└───────────────────────────────────────┴─────────────┴────────┴───────┴───────┘
 
 Degraded (1)
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
-┃ case_id                      ┃    pass     ┃ before ┃ after ┃  delta ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ multi_hop_inventory_question │ pass → pass │  0.900 │ 0.640 │ -0.260 │
-└──────────────────────────────┴─────────────┴────────┴───────┴────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                               ┃    pass     ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ multi_hop_inventory_question          │ pass → pass │      — │     — │     — │
+│   answer_correctness: 0.900→0.640     │             │        │       │       │
+│ (-0.260)  citation_precision:         │             │        │       │       │
+│ 0.900→0.640 (-0.260)                  │             │        │       │       │
+└───────────────────────────────────────┴─────────────┴────────┴───────┴───────┘
 
 Fixed (1)
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
-┃ case_id                  ┃    pass     ┃ before ┃ after ┃  delta ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ refund_policy_multi_turn │ FAIL → pass │  0.420 │ 0.810 │ +0.390 │
-└──────────────────────────┴─────────────┴────────┴───────┴────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                               ┃    pass     ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ refund_policy_multi_turn              │ FAIL → pass │      — │     — │     — │
+│   answer_correctness: 0.420→0.810     │             │        │       │       │
+│ (+0.390)  citation_precision:         │             │        │       │       │
+│ 0.420→0.810 (+0.390)                  │             │        │       │       │
+└───────────────────────────────────────┴─────────────┴────────┴───────┴───────┘
 
 Improved (1)
-┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
-┃ case_id              ┃    pass     ┃ before ┃ after ┃  delta ┃
-┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ sku_lookup_ambiguous │ pass → pass │  0.610 │ 0.790 │ +0.180 │
-└──────────────────────┴─────────────┴────────┴───────┴────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                               ┃    pass     ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ sku_lookup_ambiguous                  │ pass → pass │      — │     — │     — │
+│   answer_correctness: 0.610→0.790     │             │        │       │       │
+│ (+0.180)  citation_precision:         │             │        │       │       │
+│ 0.610→0.790 (+0.180)                  │             │        │       │       │
+└───────────────────────────────────────┴─────────────┴────────┴───────┴───────┘
 
 New (1)
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
-┃ case_id                    ┃   pass   ┃ before ┃ after ┃ delta ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
-│ tool_call_retry_on_timeout │ — → pass │      — │ 0.730 │     — │
-└────────────────────────────┴──────────┴────────┴───────┴───────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                                  ┃   pass   ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ tool_call_retry_on_timeout               │ — → pass │      — │     — │     — │
+│   answer_correctness: —→0.730 (—)        │          │        │       │       │
+│ citation_precision: —→0.730 (—)          │          │        │       │       │
+└──────────────────────────────────────────┴──────────┴────────┴───────┴───────┘
 
 Unchanged (1)
-┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
-┃ case_id             ┃    pass     ┃ before ┃ after ┃  delta ┃
-┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ greeting_smoke_test │ pass → pass │  0.950 │ 0.960 │ +0.010 │
-└─────────────────────┴─────────────┴────────┴───────┴────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ case_id                               ┃    pass     ┃ before ┃ after ┃ delta ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ greeting_smoke_test                   │ pass → pass │      — │     — │     — │
+│   answer_correctness: 0.950→0.960     │             │        │       │       │
+│ (+0.010)  citation_precision:         │             │        │       │       │
+│ 0.950→0.960 (+0.010)                  │             │        │       │       │
+└───────────────────────────────────────┴─────────────┴────────┴───────┴───────┘
 
 Regressed 1  Degraded 1  Fixed 1  Improved 1  New 1  Unchanged 1
-REMOVED: 1 case(s) present in 15dd05db03fe and gone from a4352a3136bb:
+REMOVED: 1 case(s) present in 155a50a67538 and gone from 4a20859705eb:
 legacy_fax_number_lookup
 ```
 
-Your own hashes will differ. Both accept any unambiguous prefix.
+Every case here carries two metrics (`answer_correctness`, `citation_precision`), so the
+top-level `before`/`after`/`delta` columns read `—` and the real numbers are on the
+per-metric line under the `case_id` — see [Buckets](#how-it-works) for why. Your own
+hashes will differ. Both accept any unambiguous prefix.
 
 To use your own evals, point `--results-file` at whatever your harness produces once it
 conforms to [the schema](docs/schema.md) — or convert it with
